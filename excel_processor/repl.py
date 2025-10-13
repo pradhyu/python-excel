@@ -20,6 +20,7 @@ import pandas as pd
 from .dataframe_manager import DataFrameManager
 from .sql_parser import SQLParser
 from .exceptions import SQLSyntaxError, ExcelProcessorError, DatabaseDirectoryError
+from .logger import REPLLogger
 
 
 class SQLCompleter(Completer):
@@ -51,8 +52,14 @@ class SQLCompleter(Completer):
         context = self._determine_context(text_before_cursor)
         
         if context == 'table':
-            # Complete table names (file.sheet format)
+            # Complete table names (file.sheet format) and temporary tables
             for table_name in tables_info.keys():
+                if table_name.lower().startswith(word_before_cursor.lower()):
+                    yield Completion(table_name, start_position=-len(word_before_cursor))
+            
+            # Add temporary tables
+            temp_tables = self.df_manager.list_temp_tables()
+            for table_name in temp_tables:
                 if table_name.lower().startswith(word_before_cursor.lower()):
                     yield Completion(table_name, start_position=-len(word_before_cursor))
         
@@ -90,6 +97,20 @@ class SQLCompleter(Completer):
     def _determine_context(self, text_before_cursor: str) -> str:
         """Determine what type of completion is needed based on context."""
         text_upper = text_before_cursor.upper()
+        
+        # Check if we're in CREATE TABLE AS context
+        if 'CREATE TABLE' in text_upper and 'AS' in text_upper:
+            as_pos = text_upper.rfind('AS')
+            after_as = text_before_cursor[as_pos + 2:].strip()
+            
+            # After AS, we expect SELECT or table references
+            if not after_as or after_as.upper().startswith('SELECT'):
+                return 'keyword'
+            elif 'FROM' in after_as.upper():
+                from_pos = after_as.upper().rfind('FROM')
+                after_from = after_as[from_pos + 4:].strip()
+                if not after_from or after_from.endswith(','):
+                    return 'table'
         
         # Check if we're after FROM
         if 'FROM' in text_upper:
@@ -213,6 +234,7 @@ class ExcelREPL:
         try:
             self.df_manager = DataFrameManager(self.db_directory, memory_limit_mb)
             self.sql_parser = SQLParser()
+            self.logger = REPLLogger(self.db_directory)
         except Exception as e:
             raise DatabaseDirectoryError(str(self.db_directory), str(e))
         
@@ -261,7 +283,15 @@ class ExcelREPL:
     def start(self):
         """Start the REPL interface."""
         self._show_welcome()
+        self.logger.log_session_start(self.memory_limit_mb)
         
+        try:
+            self._run_repl_loop()
+        finally:
+            self.logger.log_session_end()
+    
+    def _run_repl_loop(self):
+        """Run the main REPL loop."""
         while True:
             try:
                 # Get user input
@@ -333,21 +363,31 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         cmd_upper = command.upper().strip()
         
         if cmd_upper in ('EXIT', 'QUIT'):
+            self.logger.log_command(command, "EXIT")
             return self._handle_exit()
         elif cmd_upper == 'HELP':
+            self.logger.log_command(command, "HELP")
             self._handle_help()
             return True
         elif cmd_upper == 'SHOW DB':
+            self.logger.log_command(command, "SHOW_DB")
             self._handle_show_db()
             return True
         elif cmd_upper == 'LOAD DB':
+            self.logger.log_command(command, "LOAD_DB")
             self._handle_load_db()
             return True
         elif cmd_upper == 'SHOW MEMORY':
+            self.logger.log_command(command, "SHOW_MEMORY")
             self._handle_show_memory()
             return True
         elif cmd_upper.startswith('CLEAR CACHE'):
+            self.logger.log_command(command, "CLEAR_CACHE")
             self._handle_clear_cache(command)
+            return True
+        elif cmd_upper == 'SHOW LOGS':
+            self.logger.log_command(command, "SHOW_LOGS")
+            self._handle_show_logs()
             return True
         
         return False
@@ -364,6 +404,8 @@ Type 'HELP' for available commands or 'EXIT' to quit.
   SELECT name, salary FROM employees.staff WHERE salary > 70000
   SELECT * FROM employees.staff ORDER BY salary DESC
   SELECT * FROM employees.staff WHERE ROWNUM <= 10
+  SELECT department, COUNT(*), AVG(salary) FROM employees.staff GROUP BY department
+  SELECT department, COUNT(*) FROM employees.staff GROUP BY department HAVING COUNT(*) > 3
   SELECT * FROM file1.sheet1, file2.sheet2 WHERE file1.sheet1.id = file2.sheet2.id
   SELECT name, department FROM employees.staff > output.csv
 
@@ -371,6 +413,7 @@ Type 'HELP' for available commands or 'EXIT' to quit.
   SHOW DB          - List all Excel files and sheets
   LOAD DB          - Load all Excel files into memory
   SHOW MEMORY      - Display current memory usage
+  SHOW LOGS        - Display log file information
   CLEAR CACHE      - Clear DataFrame cache
   HELP             - Show this help message
   EXIT / QUIT      - Exit the application
@@ -379,8 +422,12 @@ Type 'HELP' for available commands or 'EXIT' to quit.
   • SELECT with column names or *
   • FROM with file.sheet notation
   • WHERE with comparison operators (=, !=, <, >, <=, >=)
+  • WHERE with IS NULL / IS NOT NULL
+  • GROUP BY with aggregation functions (COUNT, SUM, AVG, MIN, MAX)
+  • HAVING clause for filtering grouped results
   • ORDER BY with ASC/DESC
   • ROWNUM for limiting results
+  • CREATE TABLE AS for temporary tables
   • JOIN operations (basic support)
   • CSV export with > filename.csv
 
@@ -478,6 +525,13 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             
             self.console.print(table)
             
+            # Log memory usage
+            self.logger.log_memory_usage(
+                memory_info['total_mb'], 
+                memory_info['usage_percent'], 
+                len(memory_info['files'])
+            )
+            
             if memory_info['files']:
                 self.console.print("\n📄 Memory by file:")
                 for file_name, usage in memory_info['files'].items():
@@ -501,12 +555,47 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         except Exception as e:
             self.console.print(f"❌ Error clearing cache: {e}", style="red")
     
+    def _handle_show_logs(self):
+        """Handle SHOW LOGS command."""
+        try:
+            log_files = self.logger.get_log_files()
+            
+            if not log_files:
+                self.console.print("📄 No log files found.", style="yellow")
+                return
+            
+            # Create log files table
+            table = Table(title="📄 Log Files", box=box.ROUNDED)
+            table.add_column("Log Type", style="cyan")
+            table.add_column("File Path", style="green")
+            table.add_column("Size", style="yellow")
+            table.add_column("Last Modified", style="blue")
+            
+            for log_type, info in log_files.items():
+                size_str = f"{info['size'] / 1024:.1f} KB" if info['size'] > 0 else "0 B"
+                modified_str = info['modified'].strftime("%Y-%m-%d %H:%M:%S")
+                table.add_row(
+                    log_type.replace('_', ' ').title(),
+                    info['path'],
+                    size_str,
+                    modified_str
+                )
+            
+            self.console.print(table)
+            self.console.print(f"\n💡 Log directory: {self.logger.log_dir}")
+            
+        except Exception as e:
+            self.console.print(f"❌ Error showing logs: {e}", style="red")
+    
     def _handle_sql_query(self, query: str):
         """Handle SQL query execution.
         
         Args:
             query: SQL query string
         """
+        import time
+        start_time = time.time()
+        
         try:
             # Parse the query
             parsed_query = self.sql_parser.parse(query)
@@ -514,20 +603,29 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             # Execute the query (basic implementation)
             result_df = self._execute_query(parsed_query)
             
+            execution_time = time.time() - start_time
+            
+            # Log the query execution
+            self.logger.log_query(query, len(result_df), execution_time)
+            
             # Handle CSV export
             if parsed_query.output_file:
                 self._export_to_csv(result_df, parsed_query.output_file)
+                self.logger.log_export(parsed_query.output_file, len(result_df))
             else:
                 # Display results
                 self._display_results(result_df, query)
                 
         except SQLSyntaxError as e:
+            self.logger.log_error(f"SQL Syntax Error: {e.message}", query)
             self.console.print(f"❌ SQL Syntax Error: {e.message}", style="red")
             if e.suggestion:
                 self.console.print(f"💡 Suggestion: {e.suggestion}", style="yellow")
         except ExcelProcessorError as e:
+            self.logger.log_error(f"Error: {e.message}", query)
             self.console.print(f"❌ Error: {e.message}", style="red")
         except Exception as e:
+            self.logger.log_error(f"Unexpected error: {str(e)}", query)
             self.console.print(f"❌ Unexpected error: {e}", style="red")
     
     def _execute_query(self, parsed_query) -> pd.DataFrame:
@@ -553,16 +651,28 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         
         table_ref = parsed_query.from_node.tables[0]
         
-        # Load the DataFrame
-        df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
+        # Check if this is a temporary table (no sheet name)
+        if table_ref.sheet_name == "":
+            # This is a temporary table
+            temp_df = self.df_manager.get_temp_table(table_ref.file_name)
+            if temp_df is None:
+                raise ExcelProcessorError(f"Temporary table '{table_ref.file_name}' not found")
+            df = temp_df
+        else:
+            # Load the DataFrame from Excel file
+            df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
         
-        # Apply column selection
-        if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
-            columns = [str(col) for col in parsed_query.select_node.columns]
-            # Filter out columns that don't exist
-            available_columns = [col for col in columns if col in df.columns]
-            if available_columns:
-                df = df[available_columns]
+        # Handle GROUP BY queries differently
+        if parsed_query.group_by_node:
+            df = self._execute_group_by_query(df, parsed_query)
+        else:
+            # Apply column selection for non-GROUP BY queries
+            if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
+                columns = [str(col) for col in parsed_query.select_node.columns]
+                # Filter out columns that don't exist
+                available_columns = [col for col in columns if col in df.columns]
+                if available_columns:
+                    df = df[available_columns]
         
         # Apply WHERE clause (basic implementation)
         if parsed_query.where_node:
@@ -621,8 +731,144 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         # Store as temporary table
         self.df_manager.create_temp_table(table_name, result_df)
         
+        # Log the table creation
+        self.logger.log_create_table(table_name, len(result_df), len(result_df.columns))
+        
         # Display success message
         self.console.print(f"✅ Created temporary table '{table_name}' with {len(result_df)} rows and {len(result_df.columns)} columns", style="green")
+        
+        return result_df
+    
+    def _execute_group_by_query(self, df: pd.DataFrame, parsed_query) -> pd.DataFrame:
+        """Execute a GROUP BY query with aggregation functions.
+        
+        Args:
+            df: Source DataFrame
+            parsed_query: Parsed SQL query with GROUP BY
+            
+        Returns:
+            DataFrame with aggregated results
+        """
+        from .sql_ast import AggregateFunctionNode
+        
+        group_columns = parsed_query.group_by_node.columns
+        select_columns = parsed_query.select_node.columns
+        
+        # Validate group columns exist
+        for col in group_columns:
+            if col not in df.columns:
+                raise ExcelProcessorError(f"GROUP BY column '{col}' not found in table")
+        
+        # Separate aggregate functions from regular columns
+        agg_functions = {}
+        regular_columns = []
+        
+        for col in select_columns:
+            if isinstance(col, AggregateFunctionNode):
+                # Handle aggregate function
+                func_name = col.function_name.lower()
+                target_col = col.column
+                
+                if target_col == '*' and func_name == 'count':
+                    # COUNT(*) - count rows
+                    agg_functions['count'] = 'size'
+                elif target_col in df.columns:
+                    # Map SQL functions to pandas functions
+                    if func_name == 'count':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'count')
+                    elif func_name == 'sum':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'sum')
+                    elif func_name == 'avg':
+                        agg_functions[f"avg_{target_col}"] = (target_col, 'mean')
+                    elif func_name == 'min':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'min')
+                    elif func_name == 'max':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'max')
+                    elif func_name == 'stddev':
+                        agg_functions[f"stddev_{target_col}"] = (target_col, 'std')
+                    elif func_name == 'variance':
+                        agg_functions[f"variance_{target_col}"] = (target_col, 'var')
+                else:
+                    raise ExcelProcessorError(f"Column '{target_col}' not found for {func_name.upper()} function")
+            else:
+                # Regular column - must be in GROUP BY
+                col_str = str(col)
+                if col_str not in group_columns:
+                    raise ExcelProcessorError(f"Column '{col_str}' must be in GROUP BY clause or be an aggregate function")
+                regular_columns.append(col_str)
+        
+        # Perform grouping and aggregation
+        if agg_functions:
+            # Build aggregation dictionary for pandas
+            pandas_agg = {}
+            result_columns = group_columns.copy()
+            
+            for agg_name, agg_spec in agg_functions.items():
+                if agg_spec == 'size':
+                    # COUNT(*) - handle separately
+                    continue
+                else:
+                    col_name, func_name = agg_spec
+                    if col_name not in pandas_agg:
+                        pandas_agg[col_name] = []
+                    pandas_agg[col_name].append(func_name)
+                    result_columns.append(agg_name)
+            
+            # Perform aggregation
+            if pandas_agg:
+                result_df = df.groupby(group_columns, observed=False).agg(pandas_agg).reset_index()
+                
+                # Flatten column names
+                new_columns = group_columns.copy()
+                for col in result_df.columns[len(group_columns):]:
+                    if isinstance(col, tuple):
+                        # Find the corresponding agg_name
+                        col_name, func_name = col
+                        for agg_name, agg_spec in agg_functions.items():
+                            if agg_spec != 'size':
+                                target_col, target_func = agg_spec
+                                if target_col == col_name and target_func == func_name:
+                                    new_columns.append(agg_name)
+                                    break
+                        else:
+                            new_columns.append(f"{func_name}_{col_name}")
+                    else:
+                        new_columns.append(str(col))
+                
+                result_df.columns = new_columns
+            else:
+                result_df = df.groupby(group_columns, observed=False).first().reset_index()
+            
+            # Add COUNT(*) if present
+            if 'count' in agg_functions and agg_functions['count'] == 'size':
+                count_df = df.groupby(group_columns, observed=False).size().reset_index(name='count')
+                if len(result_df) == 0:
+                    result_df = count_df
+                else:
+                    result_df = result_df.merge(count_df, on=group_columns)
+        else:
+            # No aggregation functions, just grouping (like DISTINCT)
+            result_df = df.groupby(group_columns, observed=False).first().reset_index()
+        
+        # Apply HAVING clause if present
+        if parsed_query.having_node:
+            # Apply HAVING conditions (similar to WHERE but on aggregated data)
+            conditions = parsed_query.having_node.where_clause.conditions
+            for condition in conditions:
+                col_name = str(condition.left)
+                if col_name in result_df.columns:
+                    if condition.operator == '>':
+                        result_df = result_df[result_df[col_name] > condition.right]
+                    elif condition.operator == '<':
+                        result_df = result_df[result_df[col_name] < condition.right]
+                    elif condition.operator == '=':
+                        result_df = result_df[result_df[col_name] == condition.right]
+                    elif condition.operator == '>=':
+                        result_df = result_df[result_df[col_name] >= condition.right]
+                    elif condition.operator == '<=':
+                        result_df = result_df[result_df[col_name] <= condition.right]
+                    elif condition.operator in ['!=', '<>']:
+                        result_df = result_df[result_df[col_name] != condition.right]
         
         return result_df
     

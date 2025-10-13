@@ -41,19 +41,37 @@ class ExcelProcessor:
             # Parse the SQL query
             parsed_query = self.sql_parser.parse(sql)
             
+            # Handle CREATE TABLE AS statements
+            if parsed_query.query_type == "CREATE_TABLE_AS":
+                return self._execute_create_table_as(parsed_query, display_result)
+            
             # For now, we'll implement basic SELECT functionality
             # Full query execution will be implemented in later tasks
             if parsed_query.from_node and len(parsed_query.from_node.tables) == 1:
                 table_ref = parsed_query.from_node.tables[0]
-                df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
                 
-                # Apply column selection
-                if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
-                    columns = [str(col) for col in parsed_query.select_node.columns]
-                    # Filter out columns that don't exist
-                    available_columns = [col for col in columns if col in df.columns]
-                    if available_columns:
-                        df = df[available_columns]
+                # Check if this is a temporary table (no sheet name)
+                if table_ref.sheet_name == "":
+                    # This is a temporary table
+                    temp_df = self.df_manager.get_temp_table(table_ref.file_name)
+                    if temp_df is None:
+                        raise ExcelProcessorError(f"Temporary table '{table_ref.file_name}' not found")
+                    df = temp_df
+                else:
+                    # Load the DataFrame from Excel file
+                    df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
+                
+                # Handle GROUP BY queries differently
+                if parsed_query.group_by_node:
+                    df = self._execute_group_by_query(df, parsed_query)
+                else:
+                    # Apply column selection for non-GROUP BY queries
+                    if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
+                        columns = [str(col) for col in parsed_query.select_node.columns]
+                        # Filter out columns that don't exist
+                        available_columns = [col for col in columns if col in df.columns]
+                        if available_columns:
+                            df = df[available_columns]
                 
                 # Apply WHERE clause (basic implementation)
                 if parsed_query.where_node:
@@ -113,6 +131,166 @@ class ExcelProcessor:
             else:
                 raise ExcelProcessorError(f"Query execution failed: {str(e)}")
     
+    def _execute_create_table_as(self, parsed_query, display_result: bool = True) -> pd.DataFrame:
+        """Execute a CREATE TABLE AS statement in notebook.
+        
+        Args:
+            parsed_query: Parsed CREATE TABLE AS query
+            display_result: Whether to display the result
+            
+        Returns:
+            DataFrame with the created table data
+        """
+        create_node = parsed_query.create_table_as_node
+        table_name = create_node.table_name
+        select_query = create_node.select_query
+        
+        # Execute the SELECT query to get the data
+        result_df = self.query(str(select_query), display_result=False)
+        
+        # Store as temporary table
+        self.df_manager.create_temp_table(table_name, result_df)
+        
+        # Display success message
+        if display_result:
+            print(f"✅ Created temporary table '{table_name}' with {len(result_df)} rows and {len(result_df.columns)} columns")
+            self._display_dataframe(result_df, f"CREATE TABLE {table_name} AS ...")
+        
+        return result_df
+    
+    def _execute_group_by_query(self, df: pd.DataFrame, parsed_query) -> pd.DataFrame:
+        """Execute a GROUP BY query with aggregation functions.
+        
+        Args:
+            df: Source DataFrame
+            parsed_query: Parsed SQL query with GROUP BY
+            
+        Returns:
+            DataFrame with aggregated results
+        """
+        from .sql_ast import AggregateFunctionNode
+        
+        group_columns = parsed_query.group_by_node.columns
+        select_columns = parsed_query.select_node.columns
+        
+        # Validate group columns exist
+        for col in group_columns:
+            if col not in df.columns:
+                raise ExcelProcessorError(f"GROUP BY column '{col}' not found in table")
+        
+        # Separate aggregate functions from regular columns
+        agg_functions = {}
+        regular_columns = []
+        
+        for col in select_columns:
+            if isinstance(col, AggregateFunctionNode):
+                # Handle aggregate function
+                func_name = col.function_name.lower()
+                target_col = col.column
+                
+                if target_col == '*' and func_name == 'count':
+                    # COUNT(*) - count rows
+                    agg_functions['count'] = 'size'
+                elif target_col in df.columns:
+                    # Map SQL functions to pandas functions
+                    if func_name == 'count':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'count')
+                    elif func_name == 'sum':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'sum')
+                    elif func_name == 'avg':
+                        agg_functions[f"avg_{target_col}"] = (target_col, 'mean')
+                    elif func_name == 'min':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'min')
+                    elif func_name == 'max':
+                        agg_functions[f"{func_name}_{target_col}"] = (target_col, 'max')
+                    elif func_name == 'stddev':
+                        agg_functions[f"stddev_{target_col}"] = (target_col, 'std')
+                    elif func_name == 'variance':
+                        agg_functions[f"variance_{target_col}"] = (target_col, 'var')
+                else:
+                    raise ExcelProcessorError(f"Column '{target_col}' not found for {func_name.upper()} function")
+            else:
+                # Regular column - must be in GROUP BY
+                col_str = str(col)
+                if col_str not in group_columns:
+                    raise ExcelProcessorError(f"Column '{col_str}' must be in GROUP BY clause or be an aggregate function")
+                regular_columns.append(col_str)
+        
+        # Perform grouping and aggregation
+        if agg_functions:
+            # Build aggregation dictionary for pandas
+            pandas_agg = {}
+            result_columns = group_columns.copy()
+            
+            for agg_name, agg_spec in agg_functions.items():
+                if agg_spec == 'size':
+                    # COUNT(*) - handle separately
+                    continue
+                else:
+                    col_name, func_name = agg_spec
+                    if col_name not in pandas_agg:
+                        pandas_agg[col_name] = []
+                    pandas_agg[col_name].append(func_name)
+                    result_columns.append(agg_name)
+            
+            # Perform aggregation
+            if pandas_agg:
+                result_df = df.groupby(group_columns, observed=False).agg(pandas_agg).reset_index()
+                
+                # Flatten column names
+                new_columns = group_columns.copy()
+                for col in result_df.columns[len(group_columns):]:
+                    if isinstance(col, tuple):
+                        # Find the corresponding agg_name
+                        col_name, func_name = col
+                        for agg_name, agg_spec in agg_functions.items():
+                            if agg_spec != 'size':
+                                target_col, target_func = agg_spec
+                                if target_col == col_name and target_func == func_name:
+                                    new_columns.append(agg_name)
+                                    break
+                        else:
+                            new_columns.append(f"{func_name}_{col_name}")
+                    else:
+                        new_columns.append(str(col))
+                
+                result_df.columns = new_columns
+            else:
+                result_df = df.groupby(group_columns, observed=False).first().reset_index()
+            
+            # Add COUNT(*) if present
+            if 'count' in agg_functions and agg_functions['count'] == 'size':
+                count_df = df.groupby(group_columns, observed=False).size().reset_index(name='count')
+                if len(result_df) == 0:
+                    result_df = count_df
+                else:
+                    result_df = result_df.merge(count_df, on=group_columns)
+        else:
+            # No aggregation functions, just grouping (like DISTINCT)
+            result_df = df.groupby(group_columns, observed=False).first().reset_index()
+        
+        # Apply HAVING clause if present
+        if parsed_query.having_node:
+            # Apply HAVING conditions (similar to WHERE but on aggregated data)
+            conditions = parsed_query.having_node.where_clause.conditions
+            for condition in conditions:
+                col_name = str(condition.left)
+                if col_name in result_df.columns:
+                    if condition.operator == '>':
+                        result_df = result_df[result_df[col_name] > condition.right]
+                    elif condition.operator == '<':
+                        result_df = result_df[result_df[col_name] < condition.right]
+                    elif condition.operator == '=':
+                        result_df = result_df[result_df[col_name] == condition.right]
+                    elif condition.operator == '>=':
+                        result_df = result_df[result_df[col_name] >= condition.right]
+                    elif condition.operator == '<=':
+                        result_df = result_df[result_df[col_name] <= condition.right]
+                    elif condition.operator in ['!=', '<>']:
+                        result_df = result_df[result_df[col_name] != condition.right]
+        
+        return result_df
+    
     def show_db(self) -> Dict[str, Any]:
         """Show all available Excel files and sheets."""
         db_info = self.df_manager.get_database_info()
@@ -131,11 +309,21 @@ class ExcelProcessor:
         else:
             print("No Excel files found in database directory.")
         
+        # Show temporary tables if any exist
+        temp_tables = self.df_manager.list_temp_tables()
+        if temp_tables:
+            print("\n💾 In-Memory Temporary Tables:")
+            for table_name in temp_tables:
+                temp_df = self.df_manager.get_temp_table(table_name)
+                if temp_df is not None:
+                    print(f"  📋 {table_name} ({len(temp_df)} rows × {len(temp_df.columns)} columns)")
+        
         return {
             'directory': db_info.directory_path,
             'total_files': db_info.total_files,
             'loaded_files': db_info.loaded_files,
-            'files': db_info.excel_files
+            'files': db_info.excel_files,
+            'temp_tables': temp_tables
         }
     
     def load_db(self, show_progress: bool = True) -> Dict[str, Any]:

@@ -111,7 +111,7 @@ class SQLParser:
         sql_query.select_node = SelectNode(columns, distinct)
         
         # Parse FROM clause
-        from_match = re.search(r'FROM\s+(.*?)(?:\s+WHERE|\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
+        from_match = re.search(r'FROM\s+(.*?)(?:\s+WHERE|\s+GROUP\s+BY|\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
         if not from_match:
             raise SQLSyntaxError(query, "Missing FROM clause")
         
@@ -120,12 +120,25 @@ class SQLParser:
         sql_query.from_node = FromNode(tables)
         
         # Parse WHERE clause
-        where_match = re.search(r'WHERE\s+(.*?)(?:\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
+        where_match = re.search(r'WHERE\s+(.*?)(?:\s+GROUP\s+BY|\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
         if where_match:
             where_str = where_match.group(1).strip()
-
             where_clause = self._parse_where_conditions(where_str)
             sql_query.where_node = WhereNode(where_clause)
+        
+        # Parse GROUP BY clause
+        group_match = re.search(r'GROUP\s+BY\s+(.*?)(?:\s+HAVING|\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
+        if group_match:
+            group_str = group_match.group(1).strip()
+            group_columns = self._parse_group_by_columns(group_str)
+            sql_query.group_by_node = GroupByNode(group_columns)
+        
+        # Parse HAVING clause
+        having_match = re.search(r'HAVING\s+(.*?)(?:\s+ORDER\s+BY|\s*$)', query, re.IGNORECASE | re.DOTALL)
+        if having_match:
+            having_str = having_match.group(1).strip()
+            having_clause = self._parse_where_conditions(having_str)  # Same logic as WHERE
+            sql_query.having_node = HavingNode(having_clause)
         
         # Parse ORDER BY clause
         order_match = re.search(r'ORDER\s+BY\s+(.*?)$', query, re.IGNORECASE | re.DOTALL)
@@ -198,6 +211,18 @@ class SQLParser:
                     directions.append('ASC')
         
         return OrderByClause(columns, directions)
+    
+    def _parse_group_by_columns(self, group_str: str) -> List[str]:
+        """Parse GROUP BY column list."""
+        columns = []
+        parts = self._split_by_comma(group_str)
+        
+        for part in parts:
+            part = part.strip()
+            if part:
+                columns.append(part)
+        
+        return columns
     
     def _split_by_comma(self, text: str) -> List[str]:
         """Split text by comma, respecting parentheses."""
@@ -305,7 +330,7 @@ class SQLParser:
 
     
     def _parse_table_reference(self, table_expr: str) -> TableReference:
-        """Parse table reference in format 'file.sheet' or 'file.sheet AS alias'."""
+        """Parse table reference in format 'file.sheet' or 'file.sheet AS alias', or temporary table name."""
         parts = table_expr.split()
         
         # Handle alias
@@ -323,13 +348,10 @@ class SQLParser:
         else:
             table_name = parts[0] if parts else table_expr
         
-        # Parse file.sheet notation
+        # Check if this is a simple table name (could be temporary table)
         if '.' not in table_name:
-            raise SQLSyntaxError(
-                table_expr, 
-                f"Table reference '{table_name}' must be in format 'file.sheet'",
-                suggestion="Use format like 'employees.xlsx.sheet1' or 'data.employees'"
-            )
+            # For temporary tables, use the table name as both file and sheet
+            return TableReference(table_name, "", alias)
         
         # Split on last dot to handle files with dots in names
         file_part, sheet_name = table_name.rsplit('.', 1)

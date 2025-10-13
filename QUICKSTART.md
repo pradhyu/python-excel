@@ -54,11 +54,17 @@ uv run python -m excel_processor --db sample_data --query "SELECT name, salary F
 
 ### Basic Commands
 ```sql
--- Show all available files and sheets
+-- Show all available files and sheets (including temporary tables)
 SHOW DB
 
 -- Load all files into memory for faster queries
 LOAD DB
+
+-- Show memory usage
+SHOW MEMORY
+
+-- Show log files and query history
+SHOW LOGS
 
 -- Get help
 HELP
@@ -78,6 +84,44 @@ SELECT name, department, salary FROM employees.staff ORDER BY salary DESC
 -- Oracle-style NULL checks
 SELECT * FROM test_nulls.staff_with_nulls WHERE name IS NULL
 SELECT * FROM test_nulls.staff_with_nulls WHERE department IS NOT NULL
+```
+
+### GROUP BY and Aggregation Functions
+```sql
+-- Count employees by department
+SELECT department, COUNT(*) FROM employees.staff GROUP BY department
+
+-- Department statistics
+SELECT department, COUNT(*), AVG(salary), MIN(salary), MAX(salary) 
+FROM employees.staff GROUP BY department
+
+-- Filter grouped results with HAVING
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary
+FROM employees.staff 
+GROUP BY department 
+HAVING COUNT(*) >= 3
+
+-- Combine with WHERE clause
+SELECT department, SUM(salary) as total_salary
+FROM employees.staff 
+WHERE salary > 65000
+GROUP BY department
+```
+
+### Temporary Tables (Oracle-style CREATE TABLE AS)
+```sql
+-- Create temporary table from query results
+CREATE TABLE high_earners AS SELECT name, salary FROM employees.staff WHERE salary > 70000
+
+-- Query the temporary table
+SELECT * FROM high_earners
+
+-- Use in complex queries with GROUP BY
+CREATE TABLE dept_stats AS 
+  SELECT department, COUNT(*) as count, AVG(salary) as avg_sal 
+  FROM employees.staff GROUP BY department
+
+SELECT * FROM dept_stats WHERE count > 3
 ```
 
 ### Joins
@@ -133,6 +177,25 @@ excel = ExcelProcessor('sample_data')
 result = excel.query("SELECT * FROM employees.staff WHERE salary > 70000")
 ```
 
+## Logging and Query History
+
+All REPL interactions are automatically logged to the `.log` directory:
+
+```bash
+# View log files
+SHOW LOGS
+
+# Log files created:
+# - repl_session_YYYYMMDD_HHMMSS.log (session activity)
+# - query_history.log (SQL queries with timing)
+```
+
+Example log entries:
+```
+2025-10-12 22:57:31 - QUERY: SELECT * FROM employees.staff WHERE salary > 70000 | ROWS: 6 (0.041s)
+2025-10-12 22:57:56 - CREATED TABLE: high_earners (6 rows × 2 columns)
+```
+
 ## Next Steps
 
 - Check out the full [README.md](README.md) for comprehensive documentation
@@ -141,6 +204,7 @@ result = excel.query("SELECT * FROM employees.staff WHERE salary > 70000")
 - Try more complex queries with multiple joins and aggregations
 - Experiment with different Excel files and sheet structures
 - Create visualizations and analysis in Jupyter notebooks
+- Review query history in the `.log` directory for performance analysis
 
 ## Need Help?
 
