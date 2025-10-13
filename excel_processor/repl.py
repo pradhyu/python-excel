@@ -31,7 +31,7 @@ class SQLCompleter(Completer):
             'SELECT', 'FROM', 'WHERE', 'ORDER', 'BY', 'GROUP', 'HAVING',
             'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL',
             'ASC', 'DESC', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
-            'INNER', 'LEFT', 'RIGHT', 'JOIN', 'ON', 'AS'
+            'INNER', 'LEFT', 'RIGHT', 'JOIN', 'ON', 'AS', 'CREATE', 'TABLE'
         ]
         self.operators = ['=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'IN', 'IS', 'IS NOT']
         
