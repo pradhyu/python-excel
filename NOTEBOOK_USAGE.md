@@ -252,6 +252,13 @@ monthly_sales.plot(title='Monthly Sales Trend')
 plt.show()
 ```
 
+## Recent Updates
+
+✅ **Fixed Magic Commands**: Magic commands now work properly in Jupyter notebooks  
+✅ **Oracle-style NULL Support**: Added `IS NULL` and `IS NOT NULL` operators  
+✅ **Improved WHERE Clauses**: Better parsing and execution of complex conditions  
+✅ **Quote Support**: Both single (`'`) and double (`"`) quotes work in queries  
+
 ## Troubleshooting
 
 ### Common Issues
@@ -260,6 +267,7 @@ plt.show()
 2. **File not found**: Check that your database directory path is correct
 3. **Memory issues**: Use `%excel_memory` to monitor usage and clear cache if needed
 4. **Query errors**: Verify file and sheet names with `%excel_show_db`
+5. **Syntax errors**: Use proper SQL syntax with Oracle-style operators like `IS NULL`
 
 ### Getting Help
 

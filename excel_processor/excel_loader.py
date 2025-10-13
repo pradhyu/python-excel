@@ -228,9 +228,35 @@ class ExcelLoader:
                         df[column] = numeric_series
                         continue
                 
-                # Try to convert to datetime
+                # Try to convert to datetime with common formats first
                 try:
-                    datetime_series = pd.to_datetime(df[column], errors='coerce')
+                    # Common date formats to try
+                    date_formats = [
+                        '%Y-%m-%d',
+                        '%m/%d/%Y', 
+                        '%d/%m/%Y',
+                        '%Y-%m-%d %H:%M:%S',
+                        '%m/%d/%Y %H:%M:%S'
+                    ]
+                    
+                    datetime_series = None
+                    
+                    # Try specific formats first to avoid warnings
+                    for fmt in date_formats:
+                        try:
+                            datetime_series = pd.to_datetime(df[column], format=fmt, errors='coerce')
+                            if not datetime_series.isna().all():
+                                break
+                        except:
+                            continue
+                    
+                    # If no specific format worked, fall back to automatic parsing with warnings suppressed
+                    if datetime_series is None or datetime_series.isna().all():
+                        import warnings
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", UserWarning)
+                            datetime_series = pd.to_datetime(df[column], errors='coerce')
+                    
                     if not datetime_series.isna().all():
                         non_null_count = df[column].notna().sum()
                         datetime_count = datetime_series.notna().sum()

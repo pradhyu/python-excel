@@ -28,10 +28,26 @@ This creates:
 - `customers.xlsx` - Customer information
 - `special_data.xlsx` - Data with special characters for testing
 
-## 3. Start the REPL
+## 3. Start the REPL or Run Single Query
 
+### Interactive REPL Mode
 ```bash
 uv run python -m excel_processor --db sample_data
+```
+
+**💡 Pro Tip:** The REPL has intelligent auto-completion! Press `Tab` while typing to get:
+- Table names after `FROM`
+- Column names in `SELECT` and `WHERE` clauses  
+- Actual data values after operators like `=`, `>`, etc.
+- SQL keywords and commands
+
+### Single Query Mode (Great for Scripting)
+```bash
+# Execute one query and exit
+uv run python -m excel_processor --db sample_data --query "SELECT * FROM employees.staff WHERE department='Engineering'"
+
+# Export to CSV
+uv run python -m excel_processor --db sample_data --query "SELECT name, salary FROM employees.staff WHERE salary > 70000 > high_earners.csv"
 ```
 
 ## 4. Try These Commands
@@ -58,6 +74,10 @@ SELECT name, salary FROM employees.staff WHERE salary > 70000
 
 -- Sort by salary
 SELECT name, department, salary FROM employees.staff ORDER BY salary DESC
+
+-- Oracle-style NULL checks
+SELECT * FROM test_nulls.staff_with_nulls WHERE name IS NULL
+SELECT * FROM test_nulls.staff_with_nulls WHERE department IS NOT NULL
 ```
 
 ### Joins

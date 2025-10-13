@@ -5,7 +5,7 @@ from typing import List, Optional, Union, Dict, Tuple
 
 from .sql_ast import (
     SQLQuery, SelectNode, FromNode, WhereNode, JoinNode, OrderByNode, 
-    LimitNode, GroupByNode, HavingNode, AggregateFunctionNode
+    LimitNode, GroupByNode, HavingNode, AggregateFunctionNode, CreateTableAsNode
 )
 from .models import (
     TableReference, ColumnReference, Condition, JoinClause, 
@@ -70,15 +70,20 @@ class SQLParser:
             if not query:
                 raise SQLSyntaxError(query, "Empty or invalid query")
             
-            if not query.upper().startswith('SELECT'):
-                raise SQLSyntaxError(query, "Only SELECT statements are supported")
+            query_upper = query.upper()
+            if not (query_upper.startswith('SELECT') or query_upper.startswith('CREATE TABLE')):
+                raise SQLSyntaxError(query, "Only SELECT and CREATE TABLE AS statements are supported")
             
             # Create SQLQuery object
             sql_query = SQLQuery()
             sql_query.output_file = output_file
             
-            # Parse different clauses using regex
-            self._parse_query_regex(query, sql_query)
+            # Check if this is a CREATE TABLE AS statement
+            if query_upper.startswith('CREATE TABLE'):
+                self._parse_create_table_as(query, sql_query)
+            else:
+                # Parse different clauses using regex
+                self._parse_query_regex(query, sql_query)
             
             return sql_query
         
@@ -349,19 +354,24 @@ class SQLParser:
                     pass
                 return Condition('ROWNUM', operator, value)
         
-        # Find operator
+        # Find operator with proper word boundaries
         for op in sorted(self.comparison_operators, key=len, reverse=True):
-            if op in condition_str.upper():
-                # Find the actual position in original case
-                op_pos = condition_str.upper().find(op)
-                if op_pos >= 0:  # Changed from > 0 to >= 0
+            # For word operators like IN, LIKE, etc., use word boundaries
+            if op.isalpha() or ' ' in op:
+                pattern = r'\b' + re.escape(op) + r'\b'
+                match = re.search(pattern, condition_str, re.IGNORECASE)
+                if match:
+                    op_pos = match.start()
                     left = condition_str[:op_pos].strip()
-                    right = condition_str[op_pos + len(op):].strip()
+                    right = condition_str[match.end():].strip()
                     
                     # Make sure we have both left and right parts
                     if left and right:
-                        # Parse right side value
-                        if right.startswith("'") and right.endswith("'"):
+                        # Parse right side value - handle NULL specially
+                        if right.upper() == 'NULL':
+                            right = 'NULL'
+                        elif ((right.startswith("'") and right.endswith("'")) or 
+                            (right.startswith('"') and right.endswith('"'))):
                             right = right[1:-1]  # Remove quotes
                         elif right.isdigit():
                             right = int(right)
@@ -369,12 +379,50 @@ class SQLParser:
                             right = float(right)
                         
                         return Condition(left, op, right)
+            else:
+                # For symbol operators like =, !=, etc., use simple search
+                if op in condition_str:
+                    op_pos = condition_str.find(op)
+                    if op_pos >= 0:
+                        left = condition_str[:op_pos].strip()
+                        right = condition_str[op_pos + len(op):].strip()
+                        
+                        # Make sure we have both left and right parts
+                        if left and right:
+                            # Parse right side value
+                            if ((right.startswith("'") and right.endswith("'")) or 
+                                (right.startswith('"') and right.endswith('"'))):
+                                right = right[1:-1]  # Remove quotes
+                            elif right.isdigit():
+                                right = int(right)
+                            elif re.match(r'^\d+\.\d+$', right):
+                                right = float(right)
+                            
+                            return Condition(left, op, right)
         
         raise SQLSyntaxError(condition_str, f"Invalid condition: {condition_str}")
     
-
-    
-
+    def _parse_create_table_as(self, query: str, sql_query: SQLQuery):
+        """Parse CREATE TABLE AS statement."""
+        # Pattern: CREATE TABLE table_name AS (SELECT ...)
+        # or: CREATE TABLE table_name AS SELECT ...
+        
+        pattern = r'CREATE\s+TABLE\s+(\w+)\s+AS\s*\(?(.*?)\)?$'
+        match = re.match(pattern, query, re.IGNORECASE | re.DOTALL)
+        
+        if not match:
+            raise SQLSyntaxError(query, "Invalid CREATE TABLE AS syntax. Expected: CREATE TABLE table_name AS SELECT ...")
+        
+        table_name = match.group(1)
+        select_query_str = match.group(2).strip()
+        
+        # Parse the SELECT query
+        select_query = SQLQuery()
+        self._parse_query_regex(select_query_str, select_query)
+        
+        # Create the CREATE TABLE AS node
+        sql_query.query_type = "CREATE_TABLE_AS"
+        sql_query.create_table_as_node = CreateTableAsNode(table_name, select_query)
     
     def validate_syntax(self, query: str) -> List[str]:
         """Validate SQL syntax and return list of errors.

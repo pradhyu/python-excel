@@ -32,6 +32,7 @@ class DataFrameManager:
         self.excel_loader = ExcelLoader()
         self.loaded_files: Dict[str, ExcelFile] = {}
         self._file_cache: Dict[str, datetime] = {}  # filename -> last_modified
+        self.temp_tables: Dict[str, pd.DataFrame] = {}  # In-memory temporary tables
         
         # Validate database directory
         if not self.db_directory.exists():
@@ -74,7 +75,8 @@ class DataFrameManager:
             directory_path=str(self.db_directory),
             excel_files=excel_files,
             total_files=len(excel_files),
-            loaded_files=len(self.loaded_files)
+            loaded_files=len(self.loaded_files),
+            temp_tables=list(self.temp_tables.keys())
         )
     
     def list_all_files_and_sheets(self) -> Dict[str, List[str]]:
@@ -152,15 +154,19 @@ class DataFrameManager:
             )
     
     def get_dataframe(self, file_name: str, sheet_name: Union[str, int]) -> pd.DataFrame:
-        """Get a specific DataFrame from a file and sheet.
+        """Get a specific DataFrame from a file and sheet, or from temporary tables.
         
         Args:
-            file_name: Name of the Excel file
+            file_name: Name of the Excel file or temporary table
             sheet_name: Name or index of the sheet
             
         Returns:
             pandas DataFrame
         """
+        # Check if this is a temporary table reference
+        if file_name in self.temp_tables:
+            return self.temp_tables[file_name]
+        
         # Load the file if not already loaded
         excel_file = self.load_excel_file(file_name)
         
@@ -354,6 +360,52 @@ class DataFrameManager:
         
         # Return original if no file found (will raise error later)
         return file_part, sheet_name
+    
+    def create_temp_table(self, table_name: str, df: pd.DataFrame) -> None:
+        """Create a temporary in-memory table.
+        
+        Args:
+            table_name: Name of the temporary table
+            df: DataFrame to store as temporary table
+        """
+        self.temp_tables[table_name] = df.copy()
+    
+    def get_temp_table(self, table_name: str) -> Optional[pd.DataFrame]:
+        """Get a temporary table by name.
+        
+        Args:
+            table_name: Name of the temporary table
+            
+        Returns:
+            DataFrame if found, None otherwise
+        """
+        return self.temp_tables.get(table_name)
+    
+    def list_temp_tables(self) -> List[str]:
+        """List all temporary table names.
+        
+        Returns:
+            List of temporary table names
+        """
+        return list(self.temp_tables.keys())
+    
+    def drop_temp_table(self, table_name: str) -> bool:
+        """Drop a temporary table.
+        
+        Args:
+            table_name: Name of the temporary table to drop
+            
+        Returns:
+            True if table was dropped, False if not found
+        """
+        if table_name in self.temp_tables:
+            del self.temp_tables[table_name]
+            return True
+        return False
+    
+    def clear_temp_tables(self) -> None:
+        """Clear all temporary tables."""
+        self.temp_tables.clear()
     
     def validate_table_reference(self, table_ref: str) -> bool:
         """Validate that a table reference exists.

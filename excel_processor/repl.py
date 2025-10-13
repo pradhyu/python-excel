@@ -7,7 +7,8 @@ from typing import Optional, Dict, Any
 from prompt_toolkit import prompt
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import WordCompleter, Completer, Completion
+from prompt_toolkit.document import Document
 from prompt_toolkit.shortcuts import confirm
 from rich.console import Console
 from rich.table import Table
@@ -19,6 +20,180 @@ import pandas as pd
 from .dataframe_manager import DataFrameManager
 from .sql_parser import SQLParser
 from .exceptions import SQLSyntaxError, ExcelProcessorError, DatabaseDirectoryError
+
+
+class SQLCompleter(Completer):
+    """Custom completer for SQL queries with Excel context."""
+    
+    def __init__(self, df_manager: DataFrameManager):
+        self.df_manager = df_manager
+        self.sql_keywords = [
+            'SELECT', 'FROM', 'WHERE', 'ORDER', 'BY', 'GROUP', 'HAVING',
+            'AND', 'OR', 'NOT', 'IN', 'LIKE', 'BETWEEN', 'IS', 'NULL',
+            'ASC', 'DESC', 'DISTINCT', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX',
+            'INNER', 'LEFT', 'RIGHT', 'JOIN', 'ON', 'AS'
+        ]
+        self.operators = ['=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'IN', 'IS', 'IS NOT']
+        
+    def get_completions(self, document: Document, complete_event):
+        """Generate completions based on current context."""
+        text = document.text
+        word_before_cursor = document.get_word_before_cursor()
+        text_before_cursor = document.text_before_cursor
+        
+        # Get available tables and columns
+        try:
+            tables_info = self._get_tables_and_columns()
+        except:
+            tables_info = {}
+        
+        # Determine context
+        context = self._determine_context(text_before_cursor)
+        
+        if context == 'table':
+            # Complete table names (file.sheet format)
+            for table_name in tables_info.keys():
+                if table_name.lower().startswith(word_before_cursor.lower()):
+                    yield Completion(table_name, start_position=-len(word_before_cursor))
+        
+        elif context == 'column':
+            # Complete column names from available tables
+            columns = set()
+            for table_columns in tables_info.values():
+                columns.update(table_columns.keys())
+            
+            for column in columns:
+                if column.lower().startswith(word_before_cursor.lower()):
+                    yield Completion(column, start_position=-len(word_before_cursor))
+        
+        elif context == 'value':
+            # Check if we're after IS or IS NOT - suggest NULL
+            if text_before_cursor.upper().endswith(' IS ') or text_before_cursor.upper().endswith(' IS NOT '):
+                if 'NULL'.lower().startswith(word_before_cursor.lower()):
+                    yield Completion('NULL', start_position=-len(word_before_cursor))
+            else:
+                # Complete values based on column context
+                column_name = self._get_column_from_where_context(text_before_cursor)
+                if column_name:
+                    values = self._get_column_values(column_name, tables_info)
+                    for value in values:
+                        value_str = f"'{value}'" if isinstance(value, str) else str(value)
+                        if value_str.lower().startswith(word_before_cursor.lower()):
+                            yield Completion(value_str, start_position=-len(word_before_cursor))
+        
+        else:
+            # Default: complete SQL keywords
+            for keyword in self.sql_keywords:
+                if keyword.lower().startswith(word_before_cursor.lower()):
+                    yield Completion(keyword, start_position=-len(word_before_cursor))
+    
+    def _determine_context(self, text_before_cursor: str) -> str:
+        """Determine what type of completion is needed based on context."""
+        text_upper = text_before_cursor.upper()
+        
+        # Check if we're after FROM
+        if 'FROM' in text_upper:
+            from_pos = text_upper.rfind('FROM')
+            after_from = text_before_cursor[from_pos + 4:].strip()
+            
+            # If we're right after FROM or after a comma, suggest table names
+            if not after_from or after_from.endswith(','):
+                return 'table'
+        
+        # Check if we're in a WHERE clause
+        if 'WHERE' in text_upper:
+            where_pos = text_upper.rfind('WHERE')
+            after_where = text_before_cursor[where_pos + 5:].strip()
+            
+            # If we just typed an operator, suggest values
+            for op in self.operators:
+                if after_where.endswith(f' {op} ') or after_where.endswith(f' {op}'):
+                    return 'value'
+            
+            # Otherwise suggest column names
+            return 'column'
+        
+        # Check if we're in SELECT clause
+        if 'SELECT' in text_upper and 'FROM' not in text_upper:
+            return 'column'
+        
+        return 'keyword'
+    
+    def _get_tables_and_columns(self) -> Dict[str, Dict[str, str]]:
+        """Get all available tables and their columns."""
+        tables_info = {}
+        
+        try:
+            files_and_sheets = self.df_manager.list_all_files_and_sheets()
+            
+            for file_name, sheet_names in files_and_sheets.items():
+                for sheet_name in sheet_names:
+                    table_name = f"{file_name.replace('.xlsx', '').replace('.xls', '')}.{sheet_name}"
+                    try:
+                        column_info = self.df_manager.get_column_info(file_name, sheet_name)
+                        tables_info[table_name] = column_info
+                    except:
+                        continue
+        except:
+            pass
+        
+        return tables_info
+    
+    def _get_column_from_where_context(self, text_before_cursor: str) -> Optional[str]:
+        """Extract column name from WHERE clause context."""
+        text_upper = text_before_cursor.upper()
+        
+        if 'WHERE' not in text_upper:
+            return None
+        
+        where_pos = text_upper.rfind('WHERE')
+        after_where = text_before_cursor[where_pos + 5:].strip()
+        
+        # Look for pattern: column_name operator (with space after operator)
+        for op in self.operators:
+            pattern = f' {op} '
+            if pattern in after_where.upper():
+                parts = after_where.split()
+                # Find the operator position
+                for i, part in enumerate(parts):
+                    if part.upper() == op:
+                        if i > 0:
+                            return parts[i-1]  # Return the column name before the operator
+        
+        # Also check for operators without spaces (like =)
+        for op in ['=', '!=', '<>', '<', '>', '<=', '>=']:
+            if op in after_where:
+                op_pos = after_where.find(op)
+                if op_pos > 0:
+                    column_part = after_where[:op_pos].strip()
+                    if column_part:
+                        return column_part
+        
+        return None
+    
+    def _get_column_values(self, column_name: str, tables_info: Dict[str, Dict[str, str]]) -> list:
+        """Get unique values for a column from loaded tables."""
+        values = set()
+        
+        for table_name, columns in tables_info.items():
+            if column_name in columns:
+                try:
+                    # Parse table name to get file and sheet
+                    if '.' in table_name:
+                        file_part, sheet_name = table_name.rsplit('.', 1)
+                        file_name, _ = self.df_manager.get_table_reference_info(table_name)
+                        
+                        df = self.df_manager.get_dataframe(file_name, sheet_name)
+                        if column_name in df.columns:
+                            unique_values = df[column_name].dropna().unique()
+                            # Limit to reasonable number of values
+                            for val in list(unique_values)[:20]:
+                                if pd.notna(val):
+                                    values.add(val)
+                except:
+                    continue
+        
+        return sorted(list(values))
 
 
 class ExcelREPL:
@@ -46,17 +221,42 @@ class ExcelREPL:
         self.history_file = self.db_directory / '.history'
         self.history = FileHistory(str(self.history_file))
         
-        # Setup command completion
-        self.commands = [
-            'SELECT', 'FROM', 'WHERE', 'ORDER BY', 'INNER JOIN', 'LEFT JOIN', 
-            'RIGHT JOIN', 'SHOW DB', 'LOAD DB', 'HELP', 'EXIT', 'QUIT',
-            'AND', 'OR', 'ASC', 'DESC', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX'
+        # Setup intelligent SQL completion
+        self.sql_completer = SQLCompleter(self.df_manager)
+        
+        # Setup command completion for special commands
+        self.special_commands = [
+            'SHOW DB', 'LOAD DB', 'HELP', 'EXIT', 'QUIT'
         ]
-        self.completer = WordCompleter(self.commands, ignore_case=True)
+        self.command_completer = WordCompleter(self.special_commands, ignore_case=True)
+        
+        # Create combined completer
+        self.completer = self._create_combined_completer()
         
         # Track loaded files for completion
         self.available_tables = set()
         self._update_table_completion()
+    
+    def _create_combined_completer(self):
+        """Create a completer that combines SQL and command completion."""
+        class CombinedCompleter(Completer):
+            def __init__(self, sql_completer, command_completer):
+                self.sql_completer = sql_completer
+                self.command_completer = command_completer
+            
+            def get_completions(self, document, complete_event):
+                text = document.text.strip().upper()
+                
+                # If it looks like a special command, use command completer
+                if (text.startswith('SHOW') or text.startswith('LOAD') or 
+                    text.startswith('HELP') or text.startswith('EXIT') or 
+                    text.startswith('QUIT')):
+                    yield from self.command_completer.get_completions(document, complete_event)
+                else:
+                    # Otherwise use SQL completer
+                    yield from self.sql_completer.get_completions(document, complete_event)
+        
+        return CombinedCompleter(self.sql_completer, self.command_completer)
     
     def start(self):
         """Start the REPL interface."""
@@ -222,6 +422,23 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             self.console.print(table)
             self.console.print(f"\n📈 Summary: {db_info.total_files} files, {db_info.loaded_files} loaded")
             
+            # Show temporary tables if any exist
+            temp_tables = self.df_manager.list_temp_tables()
+            if temp_tables:
+                temp_table = Table(title="💾 In-Memory Temporary Tables", box=box.ROUNDED)
+                temp_table.add_column("📋 Table Name", style="magenta", no_wrap=True)
+                temp_table.add_column("📊 Rows", style="cyan")
+                temp_table.add_column("📊 Columns", style="cyan")
+                
+                for table_name in temp_tables:
+                    temp_df = self.df_manager.get_temp_table(table_name)
+                    if temp_df is not None:
+                        temp_table.add_row(table_name, str(len(temp_df)), str(len(temp_df.columns)))
+                
+                self.console.print("\n")
+                self.console.print(temp_table)
+                self.console.print(f"💾 Temporary tables: {len(temp_tables)}")
+            
             # Update completion
             self._update_table_completion()
             
@@ -322,6 +539,10 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         Returns:
             DataFrame with query results
         """
+        # Handle CREATE TABLE AS statements
+        if parsed_query.query_type == "CREATE_TABLE_AS":
+            return self._execute_create_table_as(parsed_query)
+        
         # Basic implementation - will be enhanced when QueryExecutor is implemented
         if not parsed_query.from_node or not parsed_query.from_node.tables:
             raise ExcelProcessorError("Query must specify a table in FROM clause")
@@ -364,6 +585,12 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                         df = df[df[str(condition.left)] <= condition.right]
                     elif condition.operator in ['!=', '<>']:
                         df = df[df[str(condition.left)] != condition.right]
+                    elif condition.operator == 'IS':
+                        if str(condition.right).upper() == 'NULL':
+                            df = df[df[str(condition.left)].isna()]
+                    elif condition.operator == 'IS NOT':
+                        if str(condition.right).upper() == 'NULL':
+                            df = df[df[str(condition.left)].notna()]
         
         # Apply ORDER BY
         if parsed_query.order_by_node:
@@ -374,6 +601,30 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                     df = df.sort_values(by=column, ascending=ascending)
         
         return df
+    
+    def _execute_create_table_as(self, parsed_query) -> pd.DataFrame:
+        """Execute a CREATE TABLE AS statement.
+        
+        Args:
+            parsed_query: Parsed CREATE TABLE AS query
+            
+        Returns:
+            DataFrame with the created table data
+        """
+        create_node = parsed_query.create_table_as_node
+        table_name = create_node.table_name
+        select_query = create_node.select_query
+        
+        # Execute the SELECT query to get the data
+        result_df = self._execute_query(select_query)
+        
+        # Store as temporary table
+        self.df_manager.create_temp_table(table_name, result_df)
+        
+        # Display success message
+        self.console.print(f"✅ Created temporary table '{table_name}' with {len(result_df)} rows and {len(result_df.columns)} columns", style="green")
+        
+        return result_df
     
     def _display_results(self, df: pd.DataFrame, query: str):
         """Display query results in a formatted table.
@@ -471,6 +722,11 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                     if file_name.endswith('.xlsx'):
                         base_name = file_name[:-5]  # Remove .xlsx
                         self.available_tables.add(f"{base_name}.{sheet}")
+            
+            # Add temporary tables to completion
+            temp_tables = self.df_manager.list_temp_tables()
+            for table_name in temp_tables:
+                self.available_tables.add(table_name)
             
             # Update completer
             all_completions = self.commands + list(self.available_tables)

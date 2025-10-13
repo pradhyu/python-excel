@@ -116,10 +116,23 @@ class AggregateFunctionNode(ASTNode):
         return f"{self.function_name}({distinct_part}{self.column})"
 
 
+class CreateTableAsNode(ASTNode):
+    """Represents a CREATE TABLE AS statement."""
+    
+    def __init__(self, table_name: str, select_query: 'SQLQuery'):
+        self.table_name = table_name
+        self.select_query = select_query
+    
+    def __str__(self) -> str:
+        return f"CREATE TABLE {self.table_name} AS ({self.select_query})"
+
+
 class SQLQuery(ASTNode):
     """Represents a complete SQL query with all its clauses."""
     
     def __init__(self):
+        self.query_type: str = "SELECT"  # Can be "SELECT" or "CREATE_TABLE_AS"
+        self.create_table_as_node: Optional[CreateTableAsNode] = None
         self.select_node: Optional[SelectNode] = None
         self.from_node: Optional[FromNode] = None
         self.join_nodes: List[JoinNode] = []
@@ -132,6 +145,9 @@ class SQLQuery(ASTNode):
     
     def __str__(self) -> str:
         """Reconstruct the SQL query string."""
+        if self.query_type == "CREATE_TABLE_AS" and self.create_table_as_node:
+            return str(self.create_table_as_node)
+        
         parts = []
         
         if self.select_node:

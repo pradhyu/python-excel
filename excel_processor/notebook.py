@@ -59,7 +59,11 @@ class ExcelProcessor:
                 if parsed_query.where_node:
                     conditions = parsed_query.where_node.where_clause.conditions
                     for condition in conditions:
-                        if str(condition.left) in df.columns:
+                        if str(condition.left).upper() == 'ROWNUM':
+                            if condition.operator in ['<', '<=']:
+                                limit = int(condition.right)
+                                df = df.head(limit)
+                        elif str(condition.left) in df.columns:
                             if condition.operator == '>':
                                 df = df[df[str(condition.left)] > condition.right]
                             elif condition.operator == '<':
@@ -70,8 +74,14 @@ class ExcelProcessor:
                                 df = df[df[str(condition.left)] >= condition.right]
                             elif condition.operator == '<=':
                                 df = df[df[str(condition.left)] <= condition.right]
-                            elif condition.operator == '!=':
+                            elif condition.operator in ['!=', '<>']:
                                 df = df[df[str(condition.left)] != condition.right]
+                            elif condition.operator == 'IS':
+                                if str(condition.right).upper() == 'NULL':
+                                    df = df[df[str(condition.left)].isna()]
+                            elif condition.operator == 'IS NOT':
+                                if str(condition.right).upper() == 'NULL':
+                                    df = df[df[str(condition.left)].notna()]
                 
                 # Apply ORDER BY
                 if parsed_query.order_by_node:
@@ -81,13 +91,7 @@ class ExcelProcessor:
                             ascending = order_clause.directions[i] == 'ASC' if i < len(order_clause.directions) else True
                             df = df.sort_values(by=column, ascending=ascending)
                 
-                # Apply ROWNUM limit
-                if parsed_query.where_node:
-                    for condition in parsed_query.where_node.where_clause.conditions:
-                        if str(condition.left).upper() == 'ROWNUM':
-                            if condition.operator in ['<', '<=']:
-                                limit = int(condition.right)
-                                df = df.head(limit)
+
                 
                 # Handle CSV export
                 if parsed_query.output_file:
@@ -308,11 +312,12 @@ class ExcelMagics(Magics):
 
 def load_ipython_extension(ipython):
     """Load the Excel magic commands in IPython/Jupyter."""
-    ipython.register_magic_function(ExcelMagics(ipython).excel_init, 'line', 'excel_init')
-    ipython.register_magic_function(ExcelMagics(ipython).excel_show_db, 'line', 'excel_show_db')
-    ipython.register_magic_function(ExcelMagics(ipython).excel_load_db, 'line', 'excel_load_db')
-    ipython.register_magic_function(ExcelMagics(ipython).excel_sql, 'cell', 'excel_sql')
-    ipython.register_magic_function(ExcelMagics(ipython).excel_memory, 'line', 'excel_memory')
+    magics = ExcelMagics(ipython)
+    ipython.register_magic_function(magics.excel_init, 'line', 'excel_init')
+    ipython.register_magic_function(magics.excel_show_db, 'line', 'excel_show_db')
+    ipython.register_magic_function(magics.excel_load_db, 'line', 'excel_load_db')
+    ipython.register_magic_function(magics.excel_sql, 'cell', 'excel_sql')
+    ipython.register_magic_function(magics.excel_memory, 'line', 'excel_memory')
 
 
 def unload_ipython_extension(ipython):

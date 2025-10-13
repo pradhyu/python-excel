@@ -76,6 +76,7 @@ class DatabaseInfo:
     excel_files: Dict[str, List[str]]  # filename -> sheet names
     total_files: int
     loaded_files: int
+    temp_tables: List[str] = None  # List of temporary table names
     
     @classmethod
     def create_empty(cls, directory_path: str) -> 'DatabaseInfo':
@@ -84,7 +85,8 @@ class DatabaseInfo:
             directory_path=directory_path,
             excel_files={},
             total_files=0,
-            loaded_files=0
+            loaded_files=0,
+            temp_tables=[]
         )
 
 
