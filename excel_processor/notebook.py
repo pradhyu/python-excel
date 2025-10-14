@@ -65,13 +65,21 @@ class ExcelProcessor:
                 if parsed_query.group_by_node:
                     df = self._execute_group_by_query(df, parsed_query)
                 else:
-                    # Apply column selection for non-GROUP BY queries
-                    if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
-                        columns = [str(col) for col in parsed_query.select_node.columns]
-                        # Filter out columns that don't exist
-                        available_columns = [col for col in columns if col in df.columns]
-                        if available_columns:
-                            df = df[available_columns]
+                    # Check if we have window functions in SELECT
+                    has_window_functions = False
+                    if parsed_query.select_node:
+                        from .sql_ast import WindowFunctionNode
+                        for col in parsed_query.select_node.columns:
+                            if isinstance(col, WindowFunctionNode):
+                                has_window_functions = True
+                                break
+                    
+                    if has_window_functions:
+                        df = self._execute_window_functions(df, parsed_query)
+                    else:
+                        # Apply column selection for non-GROUP BY, non-window queries
+                        if parsed_query.select_node and not parsed_query.select_node.is_wildcard:
+                            df = self._apply_column_selection(df, parsed_query.select_node.columns)
                 
                 # Apply WHERE clause (basic implementation)
                 if parsed_query.where_node:
@@ -290,6 +298,193 @@ class ExcelProcessor:
                         result_df = result_df[result_df[col_name] != condition.right]
         
         return result_df
+    
+    def _execute_window_functions(self, df: pd.DataFrame, parsed_query) -> pd.DataFrame:
+        """Execute window functions in SELECT clause."""
+        from .sql_ast import WindowFunctionNode
+        
+        result_df = df.copy()
+        select_columns = []
+        
+        for col in parsed_query.select_node.columns:
+            if isinstance(col, WindowFunctionNode):
+                # Execute window function
+                window_result = self._calculate_window_function(result_df, col)
+                
+                # Add the result as a new column
+                col_name = f"{col.function_name.lower()}"
+                if col.column:
+                    col_name += f"_{col.column}"
+                
+                result_df[col_name] = window_result
+                select_columns.append(col_name)
+            else:
+                # Regular column
+                col_str = str(col)
+                if col_str == '*':
+                    # Add all existing columns
+                    select_columns.extend(result_df.columns.tolist())
+                elif col_str in result_df.columns:
+                    select_columns.append(col_str)
+        
+        # Select only the requested columns
+        if select_columns:
+            # Remove duplicates while preserving order
+            unique_columns = []
+            for col in select_columns:
+                if col not in unique_columns:
+                    unique_columns.append(col)
+            result_df = result_df[unique_columns]
+        
+        return result_df
+    
+    def _calculate_window_function(self, df: pd.DataFrame, window_func):
+        """Calculate a single window function."""
+        func_name = window_func.function_name
+        column = window_func.column
+        partition_by = window_func.partition_by
+        order_by = window_func.order_by
+        order_directions = window_func.order_directions
+        
+        # Prepare grouping and sorting
+        if partition_by:
+            # Validate partition columns exist
+            for col in partition_by:
+                if col not in df.columns:
+                    raise ExcelProcessorError(f"PARTITION BY column '{col}' not found")
+        
+        if order_by:
+            # Validate order columns exist
+            for col in order_by:
+                if col not in df.columns:
+                    raise ExcelProcessorError(f"ORDER BY column '{col}' not found")
+        
+        # Calculate window function (same logic as REPL)
+        if func_name == 'ROW_NUMBER':
+            if partition_by:
+                if order_by:
+                    ascending = [direction == 'ASC' for direction in order_directions]
+                    result = df.sort_values(order_by, ascending=ascending).groupby(partition_by).cumcount() + 1
+                else:
+                    result = df.groupby(partition_by).cumcount() + 1
+            else:
+                if order_by:
+                    ascending = [direction == 'ASC' for direction in order_directions]
+                    sorted_df = df.sort_values(order_by, ascending=ascending)
+                    result = pd.Series(range(1, len(df) + 1), index=sorted_df.index)
+                    result = result.reindex(df.index)
+                else:
+                    result = pd.Series(range(1, len(df) + 1), index=df.index)
+        
+        elif func_name == 'RANK':
+            if not order_by:
+                raise ExcelProcessorError("RANK() requires ORDER BY clause")
+            
+            ascending = [direction == 'ASC' for direction in order_directions]
+            
+            if partition_by:
+                def rank_group(group):
+                    return group[order_by].rank(method='min', ascending=ascending[0] if len(ascending) == 1 else ascending)
+                
+                result = df.groupby(partition_by).apply(rank_group).reset_index(level=0, drop=True)
+            else:
+                result = df[order_by].rank(method='min', ascending=ascending[0] if len(ascending) == 1 else ascending)
+        
+        elif func_name == 'LAG':
+            if not column or column not in df.columns:
+                raise ExcelProcessorError(f"LAG() requires a valid column name")
+            
+            if partition_by:
+                if order_by:
+                    ascending = [direction == 'ASC' for direction in order_directions]
+                    sorted_df = df.sort_values(partition_by + order_by, ascending=[True] * len(partition_by) + ascending)
+                    result = sorted_df.groupby(partition_by)[column].shift(1)
+                    result = result.reindex(df.index)
+                else:
+                    result = df.groupby(partition_by)[column].shift(1)
+            else:
+                if order_by:
+                    ascending = [direction == 'ASC' for direction in order_directions]
+                    sorted_df = df.sort_values(order_by, ascending=ascending)
+                    result = sorted_df[column].shift(1)
+                    result = result.reindex(df.index)
+                else:
+                    result = df[column].shift(1)
+        
+        else:
+            raise ExcelProcessorError(f"Window function '{func_name}' not implemented")
+        
+        return result
+    
+    def _apply_column_selection(self, df: pd.DataFrame, columns) -> pd.DataFrame:
+        """Apply column selection with support for aliases and quoted names."""
+        from .sql_ast import ColumnReference, AggregateFunctionNode, WindowFunctionNode, ColumnAliasNode
+        
+        result_data = {}
+        
+        for col in columns:
+            if isinstance(col, ColumnAliasNode):
+                # Handle column alias (expression AS alias)
+                expression = col.expression
+                alias = col.alias
+                
+                if isinstance(expression, ColumnReference):
+                    original_name = expression.column_name
+                elif isinstance(expression, str):
+                    original_name = expression
+                else:
+                    original_name = str(expression)
+                
+                if original_name in df.columns:
+                    result_data[alias] = df[original_name]
+                else:
+                    # Try to find column with case-insensitive match
+                    matched_col = None
+                    for df_col in df.columns:
+                        if df_col.lower() == original_name.lower():
+                            matched_col = df_col
+                            break
+                    if matched_col:
+                        result_data[alias] = df[matched_col]
+            elif isinstance(col, ColumnReference):
+                # Handle column reference with possible alias
+                original_name = col.column_name
+                alias = col.alias or original_name
+                
+                if original_name in df.columns:
+                    result_data[alias] = df[original_name]
+                else:
+                    # Try to find column with case-insensitive match
+                    matched_col = None
+                    for df_col in df.columns:
+                        if df_col.lower() == original_name.lower():
+                            matched_col = df_col
+                            break
+                    if matched_col:
+                        result_data[alias] = df[matched_col]
+            elif isinstance(col, (AggregateFunctionNode, WindowFunctionNode)):
+                # These should be handled elsewhere, but include for completeness
+                pass
+            else:
+                # Regular string column name
+                col_str = str(col)
+                if col_str in df.columns:
+                    result_data[col_str] = df[col_str]
+                else:
+                    # Try case-insensitive match
+                    matched_col = None
+                    for df_col in df.columns:
+                        if df_col.lower() == col_str.lower():
+                            matched_col = df_col
+                            break
+                    if matched_col:
+                        result_data[col_str] = df[matched_col]
+        
+        # Create new DataFrame with selected columns
+        if result_data:
+            return pd.DataFrame(result_data)
+        
+        return df
     
     def show_db(self) -> Dict[str, Any]:
         """Show all available Excel files and sheets."""

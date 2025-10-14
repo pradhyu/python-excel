@@ -116,6 +116,58 @@ class AggregateFunctionNode(ASTNode):
         return f"{self.function_name}({distinct_part}{self.column})"
 
 
+class WindowFunctionNode(ASTNode):
+    """Represents window functions like ROW_NUMBER() OVER (PARTITION BY ...)."""
+    
+    def __init__(self, function_name: str, column: str = None, partition_by: List[str] = None, order_by: List[str] = None, order_directions: List[str] = None):
+        self.function_name = function_name.upper()
+        self.column = column
+        self.partition_by = partition_by or []
+        self.order_by = order_by or []
+        self.order_directions = order_directions or []
+    
+    def __str__(self) -> str:
+        func_part = f"{self.function_name}({self.column or ''})"
+        
+        over_parts = []
+        if self.partition_by:
+            over_parts.append(f"PARTITION BY {', '.join(self.partition_by)}")
+        
+        if self.order_by:
+            order_items = []
+            for i, col in enumerate(self.order_by):
+                direction = self.order_directions[i] if i < len(self.order_directions) else 'ASC'
+                order_items.append(f"{col} {direction}")
+            over_parts.append(f"ORDER BY {', '.join(order_items)}")
+        
+        over_clause = f"OVER ({' '.join(over_parts)})" if over_parts else "OVER ()"
+        return f"{func_part} {over_clause}"
+
+
+class ColumnAliasNode(ASTNode):
+    """Represents a column expression with an alias (column AS alias)."""
+    
+    def __init__(self, expression: Union[str, ColumnReference, AggregateFunctionNode, WindowFunctionNode], alias: str):
+        self.expression = expression
+        self.alias = alias
+    
+    def __str__(self) -> str:
+        return f"{self.expression} AS {self.alias}"
+
+
+class LiteralNode(ASTNode):
+    """Represents a literal value (string, number, etc.)."""
+    
+    def __init__(self, value: str, data_type: str = 'string'):
+        self.value = value
+        self.data_type = data_type
+    
+    def __str__(self) -> str:
+        if self.data_type == 'string':
+            return f"'{self.value}'"
+        return str(self.value)
+
+
 class CreateTableAsNode(ASTNode):
     """Represents a CREATE TABLE AS statement."""
     

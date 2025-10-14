@@ -86,6 +86,45 @@ SELECT * FROM test_nulls.staff_with_nulls WHERE name IS NULL
 SELECT * FROM test_nulls.staff_with_nulls WHERE department IS NOT NULL
 ```
 
+### Column Names with Spaces and Aliases
+```sql
+-- Use quotes for column names with spaces
+SELECT "Full Name", "Annual Salary" FROM spaced_columns.employee_data
+
+-- Column aliases with AS keyword
+SELECT "Full Name" as employee_name, "Annual Salary" as salary 
+FROM spaced_columns.employee_data
+
+-- Both single and double quotes work
+SELECT 'Job Title' as position, "Performance Rating" as rating
+FROM spaced_columns.employee_data
+
+-- Aliases in WHERE clauses and ORDER BY
+SELECT "Full Name" as name, "Annual Salary" as salary
+FROM spaced_columns.employee_data 
+WHERE "Annual Salary" > 70000
+ORDER BY "Performance Rating" DESC
+
+-- Complex queries with multiple aliases and conditions
+SELECT "Full Name" as name, "Job Title" as role, "Annual Salary" as salary
+FROM spaced_columns.employee_data 
+WHERE "Years of Experience" > 3 AND "Annual Salary" > 70000
+ORDER BY "Performance Rating" DESC
+
+-- Quoted file and sheet names (for files/sheets with spaces)
+SELECT * FROM "Employee Data"."Staff Info"
+
+-- Quoted table names with column aliases
+SELECT "Employee Name" as name, "Department" as dept 
+FROM "Employee Data"."Staff Info" 
+WHERE "Salary" > 70000
+
+-- Table aliases with quoted names
+SELECT "Employee Name", "Salary" 
+FROM "Employee Data"."Staff Info" AS emp 
+WHERE "Salary" > 70000
+```
+
 ### GROUP BY and Aggregation Functions
 ```sql
 -- Count employees by department
@@ -106,6 +145,32 @@ SELECT department, SUM(salary) as total_salary
 FROM employees.staff 
 WHERE salary > 65000
 GROUP BY department
+```
+
+### Window Functions (Oracle-style Analytical Functions)
+```sql
+-- Row numbers within each department (ranked by salary)
+SELECT name, department, salary, 
+       ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC)
+FROM employees.staff
+
+-- Ranking functions
+SELECT name, department, salary,
+       RANK() OVER (PARTITION BY department ORDER BY salary DESC) as rank,
+       DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) as dense_rank
+FROM employees.staff
+
+-- LAG and LEAD functions for comparing with previous/next rows
+SELECT name, salary,
+       LAG(salary) OVER (ORDER BY salary) as prev_salary,
+       LEAD(salary) OVER (ORDER BY salary) as next_salary
+FROM employees.staff
+ORDER BY salary
+
+-- Window functions without partitioning
+SELECT name, salary,
+       ROW_NUMBER() OVER (ORDER BY salary DESC) as overall_rank
+FROM employees.staff
 ```
 
 ### Temporary Tables (Oracle-style CREATE TABLE AS)
@@ -195,6 +260,16 @@ Example log entries:
 2025-10-12 22:57:31 - QUERY: SELECT * FROM employees.staff WHERE salary > 70000 | ROWS: 6 (0.041s)
 2025-10-12 22:57:56 - CREATED TABLE: high_earners (6 rows × 2 columns)
 ```
+
+## 💡 Tips
+
+- Use tab completion for commands and table names
+- Arrow keys navigate command history  
+- File names can omit .xlsx extension
+- Use quotes for files/sheets with spaces: `"Employee Data"."Staff Info"`
+- Use quotes for column names with spaces: `"Full Name"`, `"Annual Salary"`
+- Both single and double quotes work: `'Job Title'` or `"Job Title"`
+- Combine quoted table and column names: `SELECT "Employee Name" FROM "Employee Data"."Staff Info"`
 
 ## Next Steps
 

@@ -5,7 +5,8 @@ from typing import List, Optional, Union, Dict, Tuple
 
 from .sql_ast import (
     SQLQuery, SelectNode, FromNode, WhereNode, JoinNode, OrderByNode, 
-    LimitNode, GroupByNode, HavingNode, AggregateFunctionNode, CreateTableAsNode
+    LimitNode, GroupByNode, HavingNode, AggregateFunctionNode, CreateTableAsNode, 
+    WindowFunctionNode, ColumnAliasNode, LiteralNode
 )
 from .models import (
     TableReference, ColumnReference, Condition, JoinClause, 
@@ -20,6 +21,10 @@ class SQLParser:
     def __init__(self):
         self.aggregate_functions = {
             'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'STDDEV', 'VARIANCE'
+        }
+        self.window_functions = {
+            'ROW_NUMBER', 'RANK', 'DENSE_RANK', 'NTILE', 
+            'LAG', 'LEAD', 'FIRST_VALUE', 'LAST_VALUE'
         }
         self.join_types = {
             'INNER', 'LEFT', 'RIGHT', 'FULL', 'OUTER', 'CROSS'
@@ -193,6 +198,111 @@ class SQLParser:
         
         return WhereClause(conditions, logical_ops)
     
+    def _parse_column_expression(self, expr: str) -> Union[str, ColumnReference, AggregateFunctionNode, WindowFunctionNode]:
+        """Parse a column expression (could be column name, *, function, or window function)."""
+        expr = expr.strip()
+        if expr == '*':
+            return '*'
+        
+        # Check for column alias (... AS alias)
+        alias = None
+        alias_match = re.search(r'\s+AS\s+(\w+)$', expr, re.IGNORECASE)
+        if alias_match:
+            alias = alias_match.group(1)
+            expr = expr[:alias_match.start()].strip()
+        
+        # Check for window functions (function(...) OVER (...))
+        window_match = re.match(r'(\w+)\s*\(\s*(.*?)\s*\)\s+OVER\s*\(\s*(.*?)\s*\)', expr, re.IGNORECASE | re.DOTALL)
+        if window_match:
+            func_name = window_match.group(1).upper()
+            func_args = window_match.group(2).strip()
+            over_clause = window_match.group(3).strip()
+            if func_name in self.window_functions:
+                window_func = self._parse_window_function(func_name, func_args, over_clause)
+                if alias:
+                    window_func.alias = alias
+                return window_func
+        
+        # Check for aggregate functions
+        func_match = re.match(r'(\w+)\s*\(\s*(.*?)\s*\)', expr, re.IGNORECASE)
+        if func_match:
+            func_name = func_match.group(1).upper()
+            func_args = func_match.group(2).strip()
+            if func_name in self.aggregate_functions:
+                distinct = False
+                if func_args.upper().startswith('DISTINCT '):
+                    distinct = True
+                    func_args = func_args[9:].strip()  # Remove 'DISTINCT '
+                agg_func = AggregateFunctionNode(func_name, func_args, distinct)
+                if alias:
+                    agg_func.alias = alias
+                return agg_func
+        
+        # Parse quoted column names and regular column references
+        return self._parse_column_reference(expr, alias)
+    
+    def _parse_column_reference(self, expr: str, alias: str = None) -> Union[str, ColumnReference]:
+        """Parse a column reference, handling quoted names and table qualifiers."""
+        # Handle quoted column names (single or double quotes)
+        if ((expr.startswith('"') and expr.endswith('"')) or 
+            (expr.startswith("'") and expr.endswith("'"))):
+            # Remove quotes
+            column_name = expr[1:-1]
+            return ColumnReference(column_name, alias=alias)
+        
+        # Check for table.column notation
+        if '.' in expr:
+            # Handle quoted table or column names in table.column format
+            parts = expr.split('.')
+            if len(parts) == 2:
+                table_part = parts[0].strip()
+                column_part = parts[1].strip()
+                
+                # Remove quotes from table name if present
+                if ((table_part.startswith('"') and table_part.endswith('"')) or 
+                    (table_part.startswith("'") and table_part.endswith("'"))):
+                    table_part = table_part[1:-1]
+                
+                # Remove quotes from column name if present
+                if ((column_part.startswith('"') and column_part.endswith('"')) or 
+                    (column_part.startswith("'") and column_part.endswith("'"))):
+                    column_part = column_part[1:-1]
+                
+                return ColumnReference(column_part, table_part, alias)
+        
+        # Regular column name (possibly with alias)
+        if alias:
+            return ColumnReference(expr, alias=alias)
+        return expr
+    
+    def _parse_window_function(self, func_name: str, func_args: str, over_clause: str) -> WindowFunctionNode:
+        """Parse a window function with OVER clause."""
+        # Parse PARTITION BY and ORDER BY from OVER clause
+        partition_by = []
+        order_by = []
+        order_directions = []
+        
+        # Parse PARTITION BY
+        partition_match = re.search(r'PARTITION\s+BY\s+(.*?)(?:\s+ORDER\s+BY|$)', over_clause, re.IGNORECASE)
+        if partition_match:
+            partition_str = partition_match.group(1).strip()
+            partition_by = [col.strip() for col in partition_str.split(',')]
+        
+        # Parse ORDER BY
+        order_match = re.search(r'ORDER\s+BY\s+(.*?)$', over_clause, re.IGNORECASE)
+        if order_match:
+            order_str = order_match.group(1).strip()
+            order_parts = [part.strip() for part in order_str.split(',')]
+            for part in order_parts:
+                part_tokens = part.split()
+                order_by.append(part_tokens[0])
+                if len(part_tokens) > 1 and part_tokens[-1].upper() in ('ASC', 'DESC'):
+                    order_directions.append(part_tokens[-1].upper())
+                else:
+                    order_directions.append('ASC')
+        
+        return WindowFunctionNode(func_name, func_args or None, partition_by, order_by, order_directions)
+    
     def _parse_order_by_columns(self, order_str: str) -> OrderByClause:
         """Parse ORDER BY column list."""
         columns = []
@@ -298,12 +408,43 @@ class SQLParser:
 
 
     
-    def _parse_column_expression(self, expr: str) -> Union[str, ColumnReference, AggregateFunctionNode]:
-        """Parse a column expression (could be column name, *, or function)."""
+    def _parse_column_expression(self, expr: str) -> Union[str, ColumnReference, AggregateFunctionNode, WindowFunctionNode, ColumnAliasNode, LiteralNode]:
+        """Parse a column expression (could be column name, *, function, window function, or alias)."""
         expr = expr.strip()
         
         if expr == '*':
             return '*'
+        
+        # Check for column alias (expression AS alias)
+        alias_match = re.match(r'(.*?)\s+AS\s+(["\']?)(\w+|[^"\']+)\2\s*$', expr, re.IGNORECASE)
+        if alias_match:
+            expression_part = alias_match.group(1).strip()
+            alias = alias_match.group(3).strip()
+            
+            # Parse the expression part recursively
+            parsed_expression = self._parse_single_column_expression(expression_part)
+            return ColumnAliasNode(parsed_expression, alias)
+        
+        # No alias, parse as single expression
+        return self._parse_single_column_expression(expr)
+    
+    def _parse_single_column_expression(self, expr: str) -> Union[str, ColumnReference, AggregateFunctionNode, WindowFunctionNode, LiteralNode]:
+        """Parse a single column expression without alias."""
+        expr = expr.strip()
+        
+        # Check for numeric literals
+        if re.match(r'^\d+(\.\d+)?$', expr):
+            return LiteralNode(expr, 'number')
+        
+        # Check for window functions (function(...) OVER (...))
+        window_match = re.match(r'(\w+)\s*\(\s*(.*?)\s*\)\s+OVER\s*\(\s*(.*?)\s*\)', expr, re.IGNORECASE | re.DOTALL)
+        if window_match:
+            func_name = window_match.group(1).upper()
+            func_args = window_match.group(2).strip()
+            over_clause = window_match.group(3).strip()
+            
+            if func_name in self.window_functions:
+                return self._parse_window_function(func_name, func_args, over_clause)
         
         # Check for aggregate functions
         func_match = re.match(r'(\w+)\s*\(\s*(.*?)\s*\)', expr, re.IGNORECASE)
@@ -319,44 +460,120 @@ class SQLParser:
                 
                 return AggregateFunctionNode(func_name, func_args, distinct)
         
+        # Check for quoted column names (with spaces) - treat as column references, not literals
+        if ((expr.startswith('"') and expr.endswith('"')) or 
+            (expr.startswith("'") and expr.endswith("'"))):
+            column_name = expr[1:-1]  # Remove quotes
+            return ColumnReference(column_name)
+        
         # Check for table.column notation
         if '.' in expr:
             parts = expr.split('.')
             if len(parts) == 2:
-                return ColumnReference(parts[1], parts[0])
+                table_part = parts[0].strip()
+                column_part = parts[1].strip()
+                
+                # Handle quoted table or column names
+                if ((table_part.startswith('"') and table_part.endswith('"')) or 
+                    (table_part.startswith("'") and table_part.endswith("'"))):
+                    table_part = table_part[1:-1]
+                
+                if ((column_part.startswith('"') and column_part.endswith('"')) or 
+                    (column_part.startswith("'") and column_part.endswith("'"))):
+                    column_part = column_part[1:-1]
+                
+                return ColumnReference(column_part, table_part)
         
         return expr
     
 
     
     def _parse_table_reference(self, table_expr: str) -> TableReference:
-        """Parse table reference in format 'file.sheet' or 'file.sheet AS alias', or temporary table name."""
-        parts = table_expr.split()
+        """Parse table reference in format 'file.sheet' or 'file.sheet AS alias', or temporary table name.
         
-        # Handle alias
+        Supports quoted file and sheet names: "Employee Data"."Staff Info"
+        """
+        table_expr = table_expr.strip()
+        
+        # Handle alias - look for AS keyword, but be careful with quoted names
         alias = None
-        if len(parts) >= 3 and parts[-2].upper() == 'AS':
-            alias = parts[-1]
-            table_name = ' '.join(parts[:-2])
-        elif len(parts) == 2:
-            # Could be "table alias" without AS keyword
-            if '.' in parts[0]:
-                table_name = parts[0]
-                alias = parts[1]
-            else:
-                table_name = table_expr
-        else:
-            table_name = parts[0] if parts else table_expr
+        table_name = table_expr
         
-        # Check if this is a simple table name (could be temporary table)
+        # Check for AS keyword (case insensitive)
+        as_match = re.search(r'\s+AS\s+(\w+)$', table_expr, re.IGNORECASE)
+        if as_match:
+            alias = as_match.group(1)
+            table_name = table_expr[:as_match.start()].strip()
+        else:
+            # Check for alias without AS keyword - but only if we don't have quoted names
+            parts = table_expr.split()
+            if len(parts) == 2 and not ('"' in table_expr or "'" in table_expr):
+                # Simple case: table_name alias (no quotes)
+                if '.' in parts[0]:
+                    table_name = parts[0]
+                    alias = parts[1]
+        
+        # Now parse the table name (which might be quoted)
         if '.' not in table_name:
-            # For temporary tables, use the table name as both file and sheet
+            # Simple table name (could be temporary table)
+            # Remove quotes if present
+            if ((table_name.startswith('"') and table_name.endswith('"')) or 
+                (table_name.startswith("'") and table_name.endswith("'"))):
+                table_name = table_name[1:-1]
             return TableReference(table_name, "", alias)
         
-        # Split on last dot to handle files with dots in names
-        file_part, sheet_name = table_name.rsplit('.', 1)
+        # Parse file.sheet format with potential quotes
+        # We need to be smart about splitting on dots when quotes are involved
+        file_part, sheet_part = self._split_table_name(table_name)
         
-        return TableReference(file_part, sheet_name, alias)
+        # Remove quotes from file and sheet names if present
+        if ((file_part.startswith('"') and file_part.endswith('"')) or 
+            (file_part.startswith("'") and file_part.endswith("'"))):
+            file_part = file_part[1:-1]
+        
+        if ((sheet_part.startswith('"') and sheet_part.endswith('"')) or 
+            (sheet_part.startswith("'") and sheet_part.endswith("'"))):
+            sheet_part = sheet_part[1:-1]
+        
+        return TableReference(file_part, sheet_part, alias)
+    
+    def _split_table_name(self, table_name: str) -> tuple:
+        """Split table name into file and sheet parts, handling quoted names.
+        
+        Examples:
+        - 'file.sheet' -> ('file', 'sheet')
+        - '"Employee Data"."Staff Info"' -> ('"Employee Data"', '"Staff Info"')
+        - 'file."Sheet Name"' -> ('file', '"Sheet Name"')
+        """
+        # If no quotes, use simple split
+        if '"' not in table_name and "'" not in table_name:
+            return table_name.rsplit('.', 1)
+        
+        # Handle quoted names - we need to find the dot that's not inside quotes
+        in_quotes = False
+        quote_char = None
+        dot_positions = []
+        
+        for i, char in enumerate(table_name):
+            if char in ('"', "'") and not in_quotes:
+                in_quotes = True
+                quote_char = char
+            elif char == quote_char and in_quotes:
+                in_quotes = False
+                quote_char = None
+            elif char == '.' and not in_quotes:
+                dot_positions.append(i)
+        
+        if not dot_positions:
+            # No unquoted dots found - treat as simple name
+            return (table_name, "")
+        
+        # Use the last unquoted dot to split
+        last_dot = dot_positions[-1]
+        file_part = table_name[:last_dot]
+        sheet_part = table_name[last_dot + 1:]
+        
+        return (file_part, sheet_part)
     
 
     
@@ -423,6 +640,40 @@ class SQLParser:
                             return Condition(left, op, right)
         
         raise SQLSyntaxError(condition_str, f"Invalid condition: {condition_str}")
+    
+    def _parse_window_function(self, func_name: str, func_args: str, over_clause: str) -> WindowFunctionNode:
+        """Parse a window function with OVER clause."""
+        # Parse function arguments
+        column = func_args if func_args else None
+        
+        # Parse OVER clause
+        partition_by = []
+        order_by = []
+        order_directions = []
+        
+        if over_clause:
+            # Parse PARTITION BY
+            partition_match = re.search(r'PARTITION\s+BY\s+(.*?)(?:\s+ORDER\s+BY|$)', over_clause, re.IGNORECASE)
+            if partition_match:
+                partition_str = partition_match.group(1).strip()
+                partition_by = [col.strip() for col in partition_str.split(',')]
+            
+            # Parse ORDER BY
+            order_match = re.search(r'ORDER\s+BY\s+(.*?)$', over_clause, re.IGNORECASE)
+            if order_match:
+                order_str = order_match.group(1).strip()
+                order_parts = [part.strip() for part in order_str.split(',')]
+                
+                for part in order_parts:
+                    part_tokens = part.split()
+                    if len(part_tokens) >= 2 and part_tokens[-1].upper() in ('ASC', 'DESC'):
+                        order_by.append(' '.join(part_tokens[:-1]))
+                        order_directions.append(part_tokens[-1].upper())
+                    else:
+                        order_by.append(part)
+                        order_directions.append('ASC')
+        
+        return WindowFunctionNode(func_name, column, partition_by, order_by, order_directions)
     
     def _parse_create_table_as(self, query: str, sql_query: SQLQuery):
         """Parse CREATE TABLE AS statement."""
