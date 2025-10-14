@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  excel-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: excel-dataframe-processor
+    volumes:
+      # Mount your local Excel/CSV files directory
+      - ./sample_data:/data:ro
+      # Mount logs directory (optional)
+      - ./logs:/app/logs
+    environment:
+      - EXCEL_DB_DIR=/data
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    
+  # Optional: Jupyter notebook service
+  excel-notebook:
+    build:
+      context: .
+      dockerfile: Dockerfile.notebook
+    container_name: excel-notebook
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./sample_data:/data:ro
+      - ./notebooks:/app/notebooks
+      - ./logs:/app/logs
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - EXCEL_DB_DIR=/data
+    command: >
+      bash -c "
+        pip install jupyter jupyterlab &&
+        jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+          --NotebookApp.token='' --NotebookApp.password=''
+      "
+    restart: unless-stopped
+
+networks:
+  default:
+    name: excel-processor-network
