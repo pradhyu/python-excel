@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This feature involves creating a Python application with a REPL (Read-Eval-Print Loop) interface that can load Excel files into DataFrames and perform SQL-like operations including SELECT queries and JOIN operations between sheets from the same or different Excel files. The application will use uv for dependency management and provide a simple SQL-based query language for data manipulation. The results can be exported as CSV files.
+This feature involves creating a comprehensive Python application with a REPL (Read-Eval-Print Loop) interface that can load Excel and CSV files into DataFrames and perform advanced SQL-like operations including SELECT queries, JOIN operations, window functions, aggregations, and complex filtering between sheets from the same or different files. The application supports quoted identifiers for files/sheets/columns with spaces, provides both interactive REPL and programmatic Python/Jupyter interfaces, uses uv for dependency management, and offers advanced features like temporary tables, memory management, and comprehensive logging. The results can be exported as CSV files using shell-like redirection syntax.
 
 ## Requirements
 
@@ -170,3 +170,84 @@ This feature involves creating a Python application with a REPL (Read-Eval-Print
 8. WHEN using notebooks THEN the system SHALL demonstrate both programmatic API and magic command usage
 9. WHEN showing examples THEN the system SHALL include data visualization and analysis workflows
 10. WHEN documenting features THEN the system SHALL provide clear examples for both REPL and notebook usage
+
+### Requirement 12
+
+**User Story:** As a data analyst, I want to use quoted identifiers for files, sheets, and columns with spaces, so that I can work with real-world Excel files that have descriptive names containing spaces.
+
+#### Acceptance Criteria
+
+1. WHEN file names contain spaces THEN the system SHALL support quoted file names like "Employee Data".xlsx
+2. WHEN sheet names contain spaces THEN the system SHALL support quoted sheet names like "Staff Info"
+3. WHEN column names contain spaces THEN the system SHALL support quoted column names like "Full Name"
+4. WHEN using quotes THEN the system SHALL support both single quotes ('name') and double quotes ("name")
+5. WHEN combining quoted identifiers THEN the system SHALL support queries like SELECT "Full Name" FROM "Employee Data"."Staff Info"
+6. WHEN using aliases THEN the system SHALL support column aliases with AS keyword like "Full Name" AS employee_name
+7. WHEN parsing quoted names THEN the system SHALL properly handle quotes in table references, column names, and WHERE clauses
+8. WHEN quotes are used THEN the system SHALL remove quotes during processing while preserving the original names
+
+### Requirement 13
+
+**User Story:** As a data analyst, I want CSV file support with the same interface as Excel files, so that I can query both Excel and CSV data sources using consistent SQL syntax.
+
+#### Acceptance Criteria
+
+1. WHEN CSV files are in the database directory THEN the system SHALL automatically detect and list them
+2. WHEN querying CSV files THEN the system SHALL use "default" as the sheet name (e.g., filename.default)
+3. WHEN CSV files have spaces in names THEN the system SHALL support quoted CSV file names like "Customer Data".default
+4. WHEN using CSV files THEN the system SHALL support all SQL operations (SELECT, WHERE, ORDER BY, GROUP BY, etc.)
+5. WHEN mixing file types THEN the system SHALL allow CSV and Excel files in the same database directory
+6. WHEN loading CSV files THEN the system SHALL use pandas read_csv with proper NA value handling
+7. WHEN displaying CSV files THEN the system SHALL show them in SHOW DB command with "default" sheet
+8. WHEN CSV files contain special characters THEN the system SHALL handle them properly during loading
+
+### Requirement 14
+
+**User Story:** As a data analyst, I want advanced SQL features including window functions, aggregations with aliases, and temporary tables, so that I can perform sophisticated data analysis operations.
+
+#### Acceptance Criteria
+
+1. WHEN using window functions THEN the system SHALL support ROW_NUMBER() OVER (ORDER BY column)
+2. WHEN using window functions THEN the system SHALL support PARTITION BY clause for grouping
+3. WHEN using window functions THEN the system SHALL support LAG() and LEAD() functions
+4. WHEN using aggregations THEN the system SHALL support aliases for aggregate functions like COUNT(*) AS total
+5. WHEN using GROUP BY THEN the system SHALL support HAVING clause for filtering grouped results
+6. WHEN creating temporary tables THEN the system SHALL support CREATE TABLE AS SELECT syntax
+7. WHEN using temporary tables THEN the system SHALL allow querying created tables in subsequent queries
+8. WHEN using DISTINCT THEN the system SHALL support SELECT DISTINCT for unique values
+9. WHEN using complex expressions THEN the system SHALL support nested functions and calculations
+10. WHEN using advanced features THEN the system SHALL provide proper error messages for unsupported operations
+
+### Requirement 15
+
+**User Story:** As a system administrator, I want comprehensive logging and session management, so that I can track usage, debug issues, and maintain query history.
+
+#### Acceptance Criteria
+
+1. WHEN using the REPL THEN the system SHALL log all queries with timestamps and execution times
+2. WHEN sessions start THEN the system SHALL log session information including memory limits and database directory
+3. WHEN errors occur THEN the system SHALL log detailed error information for debugging
+4. WHEN queries execute THEN the system SHALL log query performance metrics and row counts
+5. WHEN files are loaded THEN the system SHALL log file loading operations and memory usage
+6. WHEN CSV exports happen THEN the system SHALL log export operations with file paths and row counts
+7. WHEN using SHOW LOGS command THEN the system SHALL display log file information and locations
+8. WHEN log files exist THEN the system SHALL provide log rotation and size management
+9. WHEN debugging is needed THEN the system SHALL support different log levels and detailed tracing
+10. WHEN sessions end THEN the system SHALL log session termination and cleanup operations
+
+### Requirement 16
+
+**User Story:** As a data analyst, I want memory management and performance monitoring, so that I can work efficiently with large datasets and understand system resource usage.
+
+#### Acceptance Criteria
+
+1. WHEN loading files THEN the system SHALL track memory usage for each loaded DataFrame
+2. WHEN memory limits are approached THEN the system SHALL provide warnings and usage information
+3. WHEN using SHOW MEMORY command THEN the system SHALL display current memory usage by file
+4. WHEN clearing cache THEN the system SHALL support CLEAR CACHE command for memory management
+5. WHEN files are large THEN the system SHALL provide progress indicators during loading
+6. WHEN memory is constrained THEN the system SHALL support configurable memory limits
+7. WHEN DataFrames are cached THEN the system SHALL use efficient caching strategies
+8. WHEN monitoring performance THEN the system SHALL track query execution times
+9. WHEN optimizing queries THEN the system SHALL apply filters before joins for better performance
+10. WHEN managing resources THEN the system SHALL provide automatic cleanup of unused DataFrames

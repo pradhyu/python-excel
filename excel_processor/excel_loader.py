@@ -14,7 +14,7 @@ class ExcelLoader:
     """Handles loading Excel files and converting them to DataFrames."""
     
     def __init__(self):
-        self.supported_extensions = {'.xlsx', '.xls', '.xlsm', '.xlsb'}
+        self.supported_extensions = {'.xlsx', '.xls', '.xlsm', '.xlsb', '.csv'}
     
     def validate_file(self, file_path: Union[str, Path]) -> bool:
         """Validate if the file exists and is a supported Excel format."""
@@ -43,7 +43,10 @@ class ExcelLoader:
             )
         
         try:
-            if file_path.suffix.lower() == '.xls':
+            if file_path.suffix.lower() == '.csv':
+                # CSV files have a single "default" sheet
+                return ['default']
+            elif file_path.suffix.lower() == '.xls':
                 # Use xlrd for older .xls files
                 import xlrd
                 workbook = xlrd.open_workbook(str(file_path))
@@ -80,17 +83,25 @@ class ExcelLoader:
             )
         
         try:
-            # Determine the engine based on file extension
-            engine = 'xlrd' if file_path.suffix.lower() == '.xls' else 'openpyxl'
-            
-            # Load the specific sheet
-            df = pd.read_excel(
-                str(file_path),
-                sheet_name=sheet_identifier,
-                engine=engine,
-                na_values=['', 'N/A', 'NA', 'NULL', 'null', '#N/A', '#NULL!'],
-                keep_default_na=True
-            )
+            if file_path.suffix.lower() == '.csv':
+                # Load CSV file
+                df = pd.read_csv(
+                    str(file_path),
+                    na_values=['', 'N/A', 'NA', 'NULL', 'null', '#N/A', '#NULL!'],
+                    keep_default_na=True
+                )
+            else:
+                # Determine the engine based on file extension
+                engine = 'xlrd' if file_path.suffix.lower() == '.xls' else 'openpyxl'
+                
+                # Load the specific sheet
+                df = pd.read_excel(
+                    str(file_path),
+                    sheet_name=sheet_identifier,
+                    engine=engine,
+                    na_values=['', 'N/A', 'NA', 'NULL', 'null', '#N/A', '#NULL!'],
+                    keep_default_na=True
+                )
             
             # Clean up column names (remove leading/trailing whitespace)
             df.columns = df.columns.astype(str).str.strip()

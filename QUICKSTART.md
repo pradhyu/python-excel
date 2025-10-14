@@ -125,6 +125,67 @@ FROM "Employee Data"."Staff Info" AS emp
 WHERE "Salary" > 70000
 ```
 
+### CSV File Support
+```sql
+-- Query CSV files (use "default" as sheet name)
+SELECT * FROM sales_data.default
+
+-- CSV with column selection and aliases
+SELECT "Product Name" as product, Category, Price 
+FROM sales_data.default 
+WHERE Price > 100
+
+-- CSV files with spaces in filename
+SELECT "Full Name" as customer, City 
+FROM "Customer Data".default 
+WHERE "Total Orders" > 5
+
+-- CSV with aggregation
+SELECT Category, COUNT(*), AVG(Price) 
+FROM sales_data.default 
+GROUP BY Category
+```
+
+### Advanced SQL Features
+```sql
+-- Window functions for ranking and analysis
+SELECT name, salary, department,
+       ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC) as dept_rank
+FROM employees.staff
+
+-- Temporary tables for complex analysis
+CREATE TABLE high_performers AS 
+SELECT name, department, salary 
+FROM employees.staff 
+WHERE salary > 75000
+
+-- Query the temporary table
+SELECT department, COUNT(*) as count 
+FROM high_performers 
+GROUP BY department
+
+-- Advanced aggregations with HAVING
+SELECT department, COUNT(*) as emp_count, AVG(salary) as avg_salary
+FROM employees.staff 
+GROUP BY department 
+HAVING COUNT(*) > 2 AND AVG(salary) > 70000
+```
+
+### System Management Commands
+```sql
+-- Check memory usage and performance
+SHOW MEMORY
+
+-- View log files and session history
+SHOW LOGS
+
+-- Clear cache to free memory
+CLEAR CACHE employees.xlsx
+
+-- Or clear all cache
+CLEAR CACHE
+```
+
 ### GROUP BY and Aggregation Functions
 ```sql
 -- Count employees by department
@@ -269,6 +330,8 @@ Example log entries:
 - Use quotes for files/sheets with spaces: `"Employee Data"."Staff Info"`
 - Use quotes for column names with spaces: `"Full Name"`, `"Annual Salary"`
 - Both single and double quotes work: `'Job Title'` or `"Job Title"`
+- CSV files use "default" as sheet name: `sales_data.default`
+- CSV files with spaces: `"Customer Data".default`
 - Combine quoted table and column names: `SELECT "Employee Name" FROM "Employee Data"."Staff Info"`
 
 ## Next Steps

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Excel DataFrame Processor is a Python application that provides a REPL interface for executing Oracle-like SQL queries on Excel files. The application loads Excel sheets into pandas DataFrames and translates SQL queries into DataFrame operations. It features colorful tabular output and supports direct CSV export using shell-like redirection syntax.
+The Excel DataFrame Processor is a comprehensive Python application that provides both REPL and programmatic interfaces for executing advanced Oracle-like SQL queries on Excel and CSV files. The application loads spreadsheet data into pandas DataFrames and translates complex SQL queries (including window functions, aggregations, and temporary tables) into DataFrame operations. It features quoted identifier support for files/sheets/columns with spaces, colorful tabular output, comprehensive logging, memory management, and supports direct CSV export using shell-like redirection syntax. The system includes both interactive REPL and Jupyter notebook integration for flexible data analysis workflows.
 
 ## Architecture
 
@@ -11,22 +11,42 @@ The Excel DataFrame Processor is a Python application that provides a REPL inter
 ```mermaid
 graph TB
     A[REPL Interface] --> B[SQL Parser]
+    A --> L[Notebook Interface]
     B --> C[Query Executor]
     C --> D[DataFrame Manager]
-    D --> E[Excel Loader]
+    D --> E[Excel/CSV Loader]
     C --> F[Result Formatter]
     F --> G[Colorful Table Display]
     F --> H[CSV Exporter]
+    C --> M[Window Functions]
+    C --> N[Temporary Tables]
+    A --> O[Logger]
+    D --> P[Memory Manager]
     
     subgraph "Data Layer"
-        I[Excel Files]
+        I[Excel Files (.xlsx, .xls, .xlsm, .xlsb)]
+        Q[CSV Files]
         J[Pandas DataFrames]
         K[CSV Output]
+        R[Log Files]
+    end
+    
+    subgraph "Advanced Features"
+        S[Quoted Identifiers]
+        T[Column Aliases]
+        U[Aggregations]
+        V[JOIN Operations]
     end
     
     E --> I
+    E --> Q
     D --> J
     H --> K
+    O --> R
+    B --> S
+    C --> T
+    C --> U
+    C --> V
 ```
 
 ### Component Interaction Flow
@@ -187,6 +207,104 @@ class CSVExporter:
     def create_output_directory(self, file_path: str) -> None
 ```
 
+### 8. SQL AST and Parser Enhancements (`sql_ast.py`, `sql_parser.py`)
+
+**Responsibilities:**
+- Parse quoted identifiers for files, sheets, and columns with spaces
+- Handle column aliases with AS keyword
+- Support window functions (ROW_NUMBER, LAG, LEAD, etc.)
+- Parse CREATE TABLE AS statements for temporary tables
+- Support advanced SQL constructs (HAVING, DISTINCT, etc.)
+
+**Key Classes:**
+```python
+class ColumnReference:
+    column_name: str
+    table_name: Optional[str]
+    alias: Optional[str]
+
+class ColumnAliasNode:
+    expression: Union[str, ColumnReference]
+    alias: str
+
+class WindowFunctionNode:
+    function_name: str
+    column: Optional[str]
+    partition_by: List[str]
+    order_by: List[str]
+    order_directions: List[str]
+
+class AggregateFunctionNode:
+    function_name: str
+    column: str
+    distinct: bool
+    alias: Optional[str]
+
+class CreateTableAsNode:
+    table_name: str
+    select_query: SQLQuery
+```
+
+### 9. Notebook Interface (`notebook.py`)
+
+**Responsibilities:**
+- Provide programmatic Python API for scripts and notebooks
+- Support Jupyter magic commands (%excel_init, %%excel_sql)
+- Rich HTML table display in notebooks
+- Integration with pandas DataFrame workflows
+
+**Key Classes:**
+```python
+class ExcelProcessor:
+    def __init__(self, db_directory: str, memory_limit_mb: float = 1024.0)
+    def query(self, sql: str, display_result: bool = True) -> pd.DataFrame
+    def show_db(self) -> Dict[str, Any]
+    def load_db(self, show_progress: bool = True) -> Dict[str, Any]
+    def get_memory_usage(self) -> Dict[str, Any]
+
+class ExcelMagics:
+    def excel_init(self, line: str) -> None
+    def excel_show_db(self, line: str) -> None
+    def excel_sql(self, line: str, cell: str) -> pd.DataFrame
+```
+
+### 10. Logger (`logger.py`)
+
+**Responsibilities:**
+- Comprehensive session and query logging
+- Performance metrics tracking
+- Error logging with detailed context
+- Log file management and rotation
+
+**Key Methods:**
+```python
+class REPLLogger:
+    def log_session_start(self, memory_limit: float) -> None
+    def log_query(self, query: str, row_count: int, execution_time: float) -> None
+    def log_error(self, error: str, query: str) -> None
+    def log_export(self, file_path: str, row_count: int) -> None
+    def log_create_table(self, table_name: str, rows: int, columns: int) -> None
+    def log_memory_usage(self, total_mb: float, usage_percent: float, files: int) -> None
+    def get_log_files(self) -> Dict[str, Dict[str, Any]]
+```
+
+### 11. Memory Manager (integrated in `dataframe_manager.py`)
+
+**Responsibilities:**
+- Track memory usage per loaded DataFrame
+- Enforce configurable memory limits
+- Provide memory usage reporting
+- Support cache clearing operations
+
+**Key Methods:**
+```python
+class DataFrameManager:
+    def get_memory_usage(self) -> Dict[str, Any]
+    def clear_cache(self, file_name: Optional[str] = None) -> None
+    def check_memory_limit(self) -> bool
+    def get_dataframe_memory_usage(self, df: pd.DataFrame) -> float
+```
+
 ## Data Models
 
 ### Core Data Structures
@@ -211,16 +329,38 @@ class QueryResult:
 class REPLSession:
     db_directory: str
     loaded_files: Dict[str, ExcelFile]
+    temp_tables: Dict[str, pd.DataFrame]  # Temporary tables from CREATE TABLE AS
     query_history: List[str]
     history_file_path: str
     color_enabled: bool
+    memory_limit_mb: float
     
 @dataclass
 class DatabaseInfo:
     directory_path: str
-    excel_files: Dict[str, List[str]]  # filename -> sheet names
+    excel_files: Dict[str, List[str]]  # filename -> sheet names (includes CSV files)
     total_files: int
     loaded_files: int
+    temp_tables: List[str]  # Names of temporary tables
+
+@dataclass
+class TableReference:
+    file_name: str
+    sheet_name: str  # "default" for CSV files
+    alias: Optional[str] = None
+
+@dataclass
+class Condition:
+    left: str  # Column name (may be quoted)
+    operator: str  # =, !=, <, >, <=, >=, IS, IS NOT, etc.
+    right: Any  # Value to compare against
+
+@dataclass
+class MemoryInfo:
+    total_mb: float
+    limit_mb: float
+    usage_percent: float
+    files: Dict[str, float]  # filename -> memory usage in MB
 ```
 
 ### SQL AST Nodes
@@ -360,12 +500,10 @@ tests/
 [project]
 dependencies = [
     "pandas>=2.0.0",
-    "openpyxl>=3.1.0",
-    "xlrd>=2.0.0",
-    "rich>=13.0.0",        # For colorful terminal output
-    "click>=8.0.0",        # For CLI interface
-    "prompt-toolkit>=3.0.0", # For REPL with history
-    "sqlparse>=0.4.0",     # For SQL parsing assistance
+    "openpyxl>=3.1.0",     # For .xlsx, .xlsm, .xlsb files
+    "xlrd>=2.0.0",         # For .xls files
+    "rich>=13.0.0",        # For colorful terminal output and tables
+    "prompt-toolkit>=3.0.0", # For REPL with history and auto-completion
 ]
 
 [project.optional-dependencies]
@@ -374,6 +512,11 @@ dev = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+]
+notebook = [
+    "jupyter>=1.0.0",
+    "ipython>=8.0.0",
+    "ipywidgets>=8.0.0",
 ]
 ```
 
@@ -399,21 +542,33 @@ python excel_processor.py --db /path/to/excel/files
 
 ```python
 # Database management commands
-SHOW DB          # List all Excel files and sheets in db directory
-LOAD DB          # Load all Excel files into memory
+SHOW DB          # List all Excel/CSV files and sheets in db directory
+LOAD DB          # Load all files into memory
+SHOW MEMORY      # Display current memory usage
+SHOW LOGS        # Display log file information
+CLEAR CACHE      # Clear DataFrame cache (optionally for specific file)
 HELP             # Show command examples and help
 EXIT             # Exit the REPL
 
-# Example help output
+# Example help output with new features
 """
 Available Commands:
-  SHOW DB                           - List all Excel files and sheets
+  SHOW DB                           - List all Excel/CSV files and sheets
   LOAD DB                          - Load all files into memory
+  SHOW MEMORY                      - Display memory usage
+  SHOW LOGS                        - Show log files
+  CLEAR CACHE [filename]           - Clear cache (all or specific file)
+  
   SELECT * FROM file.sheet         - Select all columns
-  SELECT col1, col2 FROM file.sheet WHERE col1 > 10
+  SELECT "Full Name" AS name FROM "Employee Data"."Staff Info"  - Quoted names and aliases
+  SELECT * FROM sales_data.default - Query CSV files (use .default)
+  SELECT col1, col2 FROM file.sheet WHERE "Column Name" > 10
   SELECT * FROM file1.sheet1, file2.sheet2 WHERE file1.sheet1.id = file2.sheet2.id
-  SELECT * FROM file.sheet ORDER BY col1 DESC
+  SELECT department, COUNT(*) FROM file.sheet GROUP BY department HAVING COUNT(*) > 5
+  SELECT name, ROW_NUMBER() OVER (ORDER BY salary DESC) FROM file.sheet
+  CREATE TABLE temp_results AS SELECT * FROM file.sheet WHERE condition
   SELECT * FROM file.sheet > output.csv
+  
   HELP                             - Show this help
   EXIT                             - Exit application
 """

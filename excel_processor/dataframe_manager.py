@@ -51,8 +51,8 @@ class DataFrameManager:
         """Scan database directory for Excel files and return file -> sheets mapping."""
         excel_files = {}
         
-        # Supported Excel file patterns
-        patterns = ['*.xlsx', '*.xls', '*.xlsm', '*.xlsb']
+        # Supported file patterns (Excel and CSV)
+        patterns = ['*.xlsx', '*.xls', '*.xlsm', '*.xlsb', '*.csv']
         
         for pattern in patterns:
             for file_path in self.db_directory.glob(pattern):
@@ -89,8 +89,8 @@ class DataFrameManager:
         
         # Also try without extension if not found
         if not file_path.exists():
-            # Try adding common Excel extensions
-            for ext in ['.xlsx', '.xls', '.xlsm', '.xlsb']:
+            # Try adding common file extensions
+            for ext in ['.xlsx', '.xls', '.xlsm', '.xlsb', '.csv']:
                 test_path = self.db_directory / f"{file_name}{ext}"
                 if test_path.exists():
                     return test_path

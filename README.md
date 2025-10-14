@@ -1,19 +1,40 @@
 # Excel DataFrame Processor
 
-A powerful Python application that provides a REPL (Read-Eval-Print Loop) interface for executing Oracle-like SQL queries on Excel files. Load Excel spreadsheets into DataFrames and query them using familiar SQL syntax with support for joins, filtering, sorting, and CSV export.
+A powerful Python application that provides a REPL (Read-Eval-Print Loop) interface for executing Oracle-like SQL queries on Excel and CSV files. Load spreadsheets and CSV data into DataFrames and query them using familiar SQL syntax with support for joins, filtering, sorting, and CSV export.
 
 ## Features
 
-- 🔍 **Oracle-like SQL Syntax**: Query Excel files using familiar SQL commands
-- 📊 **Excel File Support**: Works with .xlsx, .xls, .xlsm, and .xlsb files
+### Core SQL Capabilities
+- 🔍 **Advanced SQL Syntax**: Oracle-like SQL with SELECT, WHERE, JOIN, GROUP BY, HAVING, ORDER BY
+- 📊 **File Format Support**: Works with Excel (.xlsx, .xls, .xlsm, .xlsb) and CSV files
 - 🔗 **Cross-file Joins**: Join data from different Excel files and sheets
-- 🎨 **Colorful Output**: Beautiful ASCII tables with syntax highlighting
-- 📤 **CSV Export**: Export query results directly to CSV files
-- 🗂️ **Database Directory**: Organize Excel files in a database directory
-- ⚡ **Memory Management**: Efficient caching and memory usage tracking
-- 🔧 **Interactive REPL**: Command history, auto-completion, and error handling
-- 📓 **Jupyter Integration**: Full notebook support with magic commands and rich display
+- 🪟 **Window Functions**: ROW_NUMBER(), RANK(), LAG(), LEAD() with OVER clause
+- 📈 **Aggregations**: COUNT, SUM, AVG, MIN, MAX with GROUP BY and HAVING
+- 🏷️ **Column Aliases**: Support for AS keyword and column renaming
+
+### Advanced Features
+- 📝 **Quoted Identifiers**: Handle files, sheets, and columns with spaces using quotes
+- 💾 **Temporary Tables**: CREATE TABLE AS SELECT for intermediate results
+- 🎯 **Smart Parsing**: Automatic detection of quoted names and proper escaping
+- 🔄 **CSV Integration**: Query CSV files using filename.default notation
+
+### User Experience
+- 🎨 **Colorful Output**: Beautiful ASCII tables with rich formatting
+- 📤 **CSV Export**: Export query results using > filename.csv syntax
+- 🗂️ **Database Directory**: Organize files in a database directory structure
+- 🔧 **Interactive REPL**: Command history, auto-completion, and intelligent error handling
+
+### System Management
+- ⚡ **Memory Management**: Configurable limits, usage tracking, and cache control
+- 📊 **Performance Monitoring**: Query timing, memory usage, and optimization
+- 📝 **Comprehensive Logging**: Session logs, query history, and error tracking
+- 🧹 **Cache Management**: CLEAR CACHE command and automatic cleanup
+
+### Integration & APIs
+- 📓 **Jupyter Integration**: Full notebook support with magic commands and rich HTML display
 - 🐍 **Python API**: Programmatic interface for scripts and applications
+- 🎛️ **Magic Commands**: %excel_init, %%excel_sql for notebook workflows
+- 📋 **Rich Display**: Automatic table formatting in notebooks and terminals
 
 ## Installation
 
@@ -319,6 +340,94 @@ This notebook demonstrates:
 
 ## Advanced Features
 
+### Quoted Identifiers and Aliases
+
+```sql
+-- Files and sheets with spaces (use quotes)
+SELECT * FROM "Employee Data"."Staff Info"
+
+-- Column names with spaces
+SELECT "Full Name", "Annual Salary" FROM "Employee Data"."Staff Info"
+
+-- Column aliases with AS keyword
+SELECT "Full Name" AS employee_name, "Annual Salary" AS salary 
+FROM "Employee Data"."Staff Info"
+
+-- Mixed quoted and unquoted
+SELECT name, "Job Title" AS position FROM employees.staff
+```
+
+### CSV File Support
+
+```sql
+-- Query CSV files (use .default as sheet name)
+SELECT * FROM sales_data.default
+
+-- CSV files with spaces in filename
+SELECT "Customer Name", Amount FROM "Sales Report.csv".default
+
+-- All SQL features work with CSV files
+SELECT Category, COUNT(*), AVG(Price) 
+FROM products.default 
+GROUP BY Category
+```
+
+### Window Functions
+
+```sql
+-- Row numbering
+SELECT name, salary, 
+       ROW_NUMBER() OVER (ORDER BY salary DESC) AS rank
+FROM employees.staff
+
+-- Partitioned ranking
+SELECT name, department, salary,
+       ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC) AS dept_rank
+FROM employees.staff
+
+-- LAG and LEAD functions
+SELECT name, salary,
+       LAG(salary) OVER (ORDER BY salary) AS prev_salary
+FROM employees.staff
+```
+
+### Temporary Tables
+
+```sql
+-- Create temporary table from query results
+CREATE TABLE high_earners AS 
+SELECT name, department, salary 
+FROM employees.staff 
+WHERE salary > 75000
+
+-- Query the temporary table
+SELECT department, COUNT(*) 
+FROM high_earners 
+GROUP BY department
+
+-- Temporary tables persist for the session
+SELECT * FROM high_earners WHERE department = 'Engineering'
+```
+
+### Advanced Aggregations
+
+```sql
+-- GROUP BY with HAVING
+SELECT department, COUNT(*) AS emp_count, AVG(salary) AS avg_salary
+FROM employees.staff 
+GROUP BY department 
+HAVING COUNT(*) > 2
+
+-- Multiple aggregations with aliases
+SELECT department,
+       COUNT(*) AS total_employees,
+       AVG(salary) AS average_salary,
+       MIN(salary) AS min_salary,
+       MAX(salary) AS max_salary
+FROM employees.staff 
+GROUP BY department
+```
+
 ### File and Sheet References
 
 ```sql
@@ -368,20 +477,27 @@ REFRESH CACHE
 
 | Command | Description |
 |---------|-------------|
-| `SHOW DB` | List all Excel files and sheets in database directory |
-| `LOAD DB` | Load all Excel files into memory |
+| `SHOW DB` | List all Excel/CSV files and sheets in database directory |
+| `LOAD DB` | Load all files into memory |
+| `SHOW MEMORY` | Display current memory usage by file |
+| `SHOW LOGS` | Display log file information and locations |
+| `CLEAR CACHE [file]` | Clear DataFrame cache (all or specific file) |
 | `HELP` | Show help and example queries |
 | `EXIT` | Exit the application |
-| `SHOW MEMORY` | Display current memory usage |
-| `CLEAR CACHE [file]` | Clear DataFrame cache |
 
 ### SQL Syntax
 
 | Feature | Syntax | Example |
 |---------|--------|---------|
 | Basic SELECT | `SELECT columns FROM file.sheet` | `SELECT * FROM data.employees` |
-| WHERE clause | `WHERE condition` | `WHERE age > 30` |
-| ORDER BY | `ORDER BY column [ASC\|DESC]` | `ORDER BY salary DESC` |
+| Quoted Names | `"Name with Spaces"` | `SELECT "Full Name" FROM "Employee Data"."Staff Info"` |
+| Column Aliases | `column AS alias` | `SELECT "Full Name" AS name` |
+| CSV Files | `filename.default` | `SELECT * FROM sales_data.default` |
+| WHERE clause | `WHERE condition` | `WHERE "Annual Salary" > 70000` |
+| ORDER BY | `ORDER BY column [ASC\|DESC]` | `ORDER BY "Performance Rating" DESC` |
+| GROUP BY | `GROUP BY columns HAVING condition` | `GROUP BY department HAVING COUNT(*) > 5` |
+| Window Functions | `FUNCTION() OVER (...)` | `ROW_NUMBER() OVER (ORDER BY salary DESC)` |
+| Temporary Tables | `CREATE TABLE name AS SELECT...` | `CREATE TABLE temp AS SELECT * FROM data` |
 | LIMIT | `WHERE ROWNUM <= n` | `WHERE ROWNUM <= 10` |
 | JOIN | `FROM table1, table2 WHERE condition` | `FROM emp e, orders o WHERE e.id = o.emp_id` |
 | Explicit JOIN | `FROM table1 JOIN table2 ON condition` | `FROM emp e JOIN orders o ON e.id = o.emp_id` |
@@ -401,10 +517,21 @@ REFRESH CACHE
 ### Aggregate Functions
 
 - `COUNT(*)` - Count rows
+- `COUNT(column)` - Count non-null values
 - `SUM(column)` - Sum values
 - `AVG(column)` - Average values
 - `MIN(column)` - Minimum value
 - `MAX(column)` - Maximum value
+- `STDDEV(column)` - Standard deviation
+- `VARIANCE(column)` - Variance
+
+### Window Functions
+
+- `ROW_NUMBER() OVER (...)` - Sequential row numbering
+- `RANK() OVER (...)` - Ranking with gaps
+- `DENSE_RANK() OVER (...)` - Ranking without gaps
+- `LAG(column) OVER (...)` - Previous row value
+- `LEAD(column) OVER (...)` - Next row value
 
 ## File Structure
 
