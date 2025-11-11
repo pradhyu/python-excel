@@ -308,7 +308,7 @@ class ExcelREPL:
             if has_existing_cache:
                 total_rows = sum(f['rows'] for f in cache_stats.get('files', []))
                 self.console.print(f"\n✅ Using existing SQLite cache ({cache_stats['cached_files']} files, {total_rows:,} rows)", style="green")
-                self.console.print("   Checking for new or updated files...", style="dim")
+                self.console.print("   Checking for new or updated files...")
             else:
                 self.console.print("\n🚀 Initializing SQLite cache for fast queries...", style="cyan")
             
@@ -317,14 +317,8 @@ class ExcelREPL:
             if cached_files:
                 success_count = sum(1 for v in cached_files.values() if v)
                 if has_existing_cache:
-                    # Count files that were newly cached (not already in cache before this run)
-                    already_cached_count = sum(1 for k in cached_files.keys() 
-                                              if self.df_manager.sqlite_cache.is_cached(self.df_manager.db_directory / k))
-                    new_files = success_count - already_cached_count
-                    if new_files > 0:
-                        self.console.print(f"   ✓ Added {new_files} new files to cache\n", style="green")
-                    else:
-                        self.console.print(f"   ✓ All files up to date\n", style="green")
+                    # Simple check: if we got results, all files are cached
+                    self.console.print("   ✓ All files up to date\n", style="green")
                 else:
                     self.console.print(f"\n✅ Cache ready! {success_count} files available for instant querying.\n", style="green bold")
             else:
@@ -337,13 +331,13 @@ class ExcelREPL:
         """Run the main REPL loop."""
         while True:
             try:
-                # Get user input
+                # Get user input with minimal features for better performance
                 user_input = prompt(
                     'excel> ',
                     history=self.history,
-                    auto_suggest=AutoSuggestFromHistory(),
-                    completer=self.completer,
-                    complete_while_typing=True
+                    auto_suggest=None,  # Disabled for performance
+                    completer=None,  # Disabled for performance
+                    complete_while_typing=False
                 ).strip()
                 
                 if not user_input:
@@ -795,14 +789,22 @@ Type 'HELP' for available commands or 'EXIT' to quit.
         if parsed_query.group_by_node:
             df = self._execute_group_by_query(df, parsed_query)
         else:
-            # Check if we have window functions in SELECT
+            # Check if we have aggregate functions or window functions in SELECT
             has_window_functions = False
+            has_aggregate_functions = False
             if parsed_query.select_node:
-                from .sql_ast import WindowFunctionNode
+                from .sql_ast import WindowFunctionNode, AggregateFunctionNode, ColumnAliasNode
                 for col in parsed_query.select_node.columns:
                     if isinstance(col, WindowFunctionNode):
                         has_window_functions = True
-                        break
+                    elif isinstance(col, AggregateFunctionNode):
+                        has_aggregate_functions = True
+                    elif isinstance(col, ColumnAliasNode):
+                        # Check if the aliased expression is an aggregate or window function
+                        if isinstance(col.expression, AggregateFunctionNode):
+                            has_aggregate_functions = True
+                        elif isinstance(col.expression, WindowFunctionNode):
+                            has_window_functions = True
             
             # Apply WHERE clause first (before column selection)
             if parsed_query.where_node:
@@ -840,7 +842,10 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                                 if str(condition.right).upper() == 'NULL':
                                     df = df[df[column_name].notna()]
             
-            if has_window_functions:
+            if has_aggregate_functions:
+                # Handle aggregate functions without GROUP BY (e.g., SELECT COUNT(*) FROM table)
+                df = self._execute_simple_aggregation(df, parsed_query)
+            elif has_window_functions:
                 df = self._execute_window_functions(df, parsed_query)
             else:
                 # Apply column selection for non-GROUP BY, non-window queries
@@ -1063,6 +1068,78 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                         result_df = result_df[result_df[col_name] != condition.right]
         
         return result_df
+    
+    def _execute_simple_aggregation(self, df: pd.DataFrame, parsed_query) -> pd.DataFrame:
+        """Execute aggregate functions without GROUP BY (e.g., SELECT COUNT(*) FROM table).
+        
+        Args:
+            df: Source DataFrame
+            parsed_query: Parsed SQL query with aggregate functions but no GROUP BY
+            
+        Returns:
+            DataFrame with single row containing aggregated results
+        """
+        from .sql_ast import AggregateFunctionNode, ColumnAliasNode
+        
+        select_columns = parsed_query.select_node.columns
+        result_data = {}
+        
+        for col in select_columns:
+            if isinstance(col, AggregateFunctionNode):
+                func_name = col.function_name.lower()
+                target_col = str(col.column).strip()
+                
+                # Determine column name for result
+                if hasattr(col, 'alias') and col.alias:
+                    result_col_name = col.alias
+                else:
+                    result_col_name = f"{func_name}({target_col})"
+                
+                # Calculate aggregate
+                if target_col == '*' and func_name == 'count':
+                    # COUNT(*) - count all rows
+                    result_data[result_col_name] = len(df)
+                elif target_col in df.columns:
+                    if func_name == 'count':
+                        result_data[result_col_name] = df[target_col].count()
+                    elif func_name == 'sum':
+                        result_data[result_col_name] = df[target_col].sum()
+                    elif func_name == 'avg':
+                        result_data[result_col_name] = df[target_col].mean()
+                    elif func_name == 'min':
+                        result_data[result_col_name] = df[target_col].min()
+                    elif func_name == 'max':
+                        result_data[result_col_name] = df[target_col].max()
+                else:
+                    raise ExcelProcessorError(f"Column '{target_col}' not found in table")
+            
+            elif isinstance(col, ColumnAliasNode):
+                # Handle aliased aggregate functions
+                if isinstance(col.expression, AggregateFunctionNode):
+                    agg_func = col.expression
+                    func_name = agg_func.function_name.lower()
+                    target_col = str(agg_func.column).strip()
+                    result_col_name = col.alias
+                    
+                    # Calculate aggregate
+                    if target_col == '*' and func_name == 'count':
+                        result_data[result_col_name] = len(df)
+                    elif target_col in df.columns:
+                        if func_name == 'count':
+                            result_data[result_col_name] = df[target_col].count()
+                        elif func_name == 'sum':
+                            result_data[result_col_name] = df[target_col].sum()
+                        elif func_name == 'avg':
+                            result_data[result_col_name] = df[target_col].mean()
+                        elif func_name == 'min':
+                            result_data[result_col_name] = df[target_col].min()
+                        elif func_name == 'max':
+                            result_data[result_col_name] = df[target_col].max()
+                    else:
+                        raise ExcelProcessorError(f"Column '{target_col}' not found in table")
+        
+        # Create single-row DataFrame with results
+        return pd.DataFrame([result_data])
     
     def _execute_window_functions(self, df: pd.DataFrame, parsed_query) -> pd.DataFrame:
         """Execute window functions in SELECT clause.

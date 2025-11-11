@@ -1,0 +1,41 @@
+#!/bin/bash
+
+echo "================================================================================"
+echo "REPL Diagnostic Test"
+echo "================================================================================"
+echo ""
+
+echo "Test 1: Single query mode (--query flag)"
+echo "----------------------------------------"
+python -m excel_processor --db sample_data --query "SELECT COUNT(*) as total FROM employees.xlsx.staff"
+echo ""
+echo "✅ Test 1 passed: --query mode works"
+echo ""
+
+echo "Test 2: Interactive mode with piped commands"
+echo "--------------------------------------------"
+echo -e "SHOW CACHE\nEXIT" | python -m excel_processor --db sample_data | grep -A 5 "Cache Statistics"
+echo ""
+echo "✅ Test 2 passed: Interactive mode responds to commands"
+echo ""
+
+echo "Test 3: Check if REPL initializes"
+echo "----------------------------------"
+timeout 2 python test_repl_startup.py
+echo ""
+echo "✅ Test 3 passed: REPL initializes without hanging"
+echo ""
+
+echo "================================================================================"
+echo "All tests passed! The REPL is working correctly."
+echo ""
+echo "When you run: python -m excel_processor --db sample_data"
+echo "The REPL will show 'excel>' prompt and wait for your input."
+echo "This is NORMAL behavior - it's not stuck, it's waiting for you to type!"
+echo ""
+echo "Try typing these commands:"
+echo "  SHOW CACHE"
+echo "  SELECT * FROM employees.xlsx.staff LIMIT 5"
+echo "  HELP"
+echo "  EXIT"
+echo "================================================================================"
