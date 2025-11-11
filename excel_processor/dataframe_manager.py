@@ -267,6 +267,76 @@ class DataFrameManager:
             'files': file_usage
         }
     
+    def cache_all_files_to_sqlite(self, show_progress: bool = True) -> Dict[str, bool]:
+        """Cache all CSV/Excel files in the database directory to SQLite.
+        
+        This pre-caches all files for instant query performance.
+        
+        Args:
+            show_progress: Whether to show caching progress
+            
+        Returns:
+            Dictionary of file_name -> success status
+        """
+        if not self.use_sqlite_cache:
+            if show_progress:
+                print("SQLite cache is disabled")
+            return {}
+        
+        excel_files = self.scan_db_directory()
+        cached_files = {}
+        new_files_count = 0
+        
+        # First pass: check which files need caching
+        files_to_cache = []
+        for file_name, sheet_names in excel_files.items():
+            file_path = self.db_directory / file_name
+            if not self.sqlite_cache.is_cached(file_path):
+                files_to_cache.append((file_name, sheet_names))
+            else:
+                cached_files[file_name] = True
+        
+        if show_progress and files_to_cache:
+            print(f"🔄 Caching {len(files_to_cache)} new files to SQLite...")
+        
+        for i, (file_name, sheet_names) in enumerate(files_to_cache, 1):
+            try:
+                file_path = self.db_directory / file_name
+                
+                if show_progress:
+                    print(f"  [{i}/{len(files_to_cache)}] 🔄 Caching {file_name}...")
+                
+                # Load all sheets
+                sheets_data = {}
+                for sheet_name in sheet_names:
+                    df = self.excel_loader.load_sheet(file_path, sheet_name)
+                    sheets_data[sheet_name] = df
+                
+                # Cache to SQLite
+                success = self.sqlite_cache.cache_file(file_path, sheets_data)
+                cached_files[file_name] = success
+                
+                if success:
+                    new_files_count += 1
+                    if show_progress:
+                        total_rows = sum(len(df) for df in sheets_data.values())
+                        print(f"      ✓ Cached {len(sheets_data)} sheets ({total_rows:,} rows)")
+                else:
+                    if show_progress:
+                        print(f"      ✗ Failed to cache")
+                
+            except Exception as e:
+                cached_files[file_name] = False
+                if show_progress:
+                    print(f"      ✗ Error: {str(e)}")
+                continue
+        
+        if show_progress and new_files_count > 0:
+            success_count = sum(1 for v in cached_files.values() if v)
+            print(f"\n✅ Successfully cached {success_count}/{len(excel_files)} files to SQLite")
+        
+        return cached_files
+    
     def clear_cache(self, file_name: Optional[str] = None) -> None:
         """Clear cached DataFrames and SQLite cache.
         

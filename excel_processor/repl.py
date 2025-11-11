@@ -248,7 +248,8 @@ class ExcelREPL:
         
         # Setup command completion for special commands
         self.special_commands = [
-            'SHOW DB', 'LOAD DB', 'HELP', 'EXIT', 'QUIT'
+            'SHOW DB', 'LOAD DB', 'SHOW MEMORY', 'SHOW CACHE', 'SHOW LOGS',
+            'CLEAR CACHE', 'REBUILD CACHE', 'HELP', 'EXIT', 'QUIT'
         ]
         self.command_completer = WordCompleter(self.special_commands, ignore_case=True)
         
@@ -285,10 +286,52 @@ class ExcelREPL:
         self._show_welcome()
         self.logger.log_session_start(self.memory_limit_mb)
         
+        # Auto-cache all files to SQLite for instant query performance
+        self._auto_cache_files()
+        
         try:
             self._run_repl_loop()
         finally:
             self.logger.log_session_end()
+    
+    def _auto_cache_files(self):
+        """Automatically cache all files to SQLite on startup."""
+        try:
+            if not self.df_manager.use_sqlite_cache:
+                self.console.print("\n⚠️  SQLite cache disabled. Queries will load files on-demand.\n", style="yellow")
+                return
+            
+            # Check if cache already exists
+            cache_stats = self.df_manager.sqlite_cache.get_cache_stats()
+            has_existing_cache = cache_stats.get('cached_files', 0) > 0
+            
+            if has_existing_cache:
+                total_rows = sum(f['rows'] for f in cache_stats.get('files', []))
+                self.console.print(f"\n✅ Using existing SQLite cache ({cache_stats['cached_files']} files, {total_rows:,} rows)", style="green")
+                self.console.print("   Checking for new or updated files...", style="dim")
+            else:
+                self.console.print("\n🚀 Initializing SQLite cache for fast queries...", style="cyan")
+            
+            cached_files = self.df_manager.cache_all_files_to_sqlite(show_progress=not has_existing_cache)
+            
+            if cached_files:
+                success_count = sum(1 for v in cached_files.values() if v)
+                if has_existing_cache:
+                    # Count files that were newly cached (not already in cache before this run)
+                    already_cached_count = sum(1 for k in cached_files.keys() 
+                                              if self.df_manager.sqlite_cache.is_cached(self.df_manager.db_directory / k))
+                    new_files = success_count - already_cached_count
+                    if new_files > 0:
+                        self.console.print(f"   ✓ Added {new_files} new files to cache\n", style="green")
+                    else:
+                        self.console.print(f"   ✓ All files up to date\n", style="green")
+                else:
+                    self.console.print(f"\n✅ Cache ready! {success_count} files available for instant querying.\n", style="green bold")
+            else:
+                self.console.print("\n⚠️  No files found to cache.\n", style="yellow")
+        except Exception as e:
+            self.console.print(f"\n⚠️  Cache initialization failed: {e}", style="yellow")
+            self.console.print("Continuing with on-demand file loading...\n", style="dim")
     
     def _run_repl_loop(self):
         """Run the main REPL loop."""
@@ -389,6 +432,14 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             self.logger.log_command(command, "SHOW_LOGS")
             self._handle_show_logs()
             return True
+        elif cmd_upper == 'SHOW CACHE':
+            self.logger.log_command(command, "SHOW_CACHE")
+            self._handle_show_cache()
+            return True
+        elif cmd_upper == 'REBUILD CACHE':
+            self.logger.log_command(command, "REBUILD_CACHE")
+            self._handle_rebuild_cache()
+            return True
         
         return False
     
@@ -415,8 +466,10 @@ Type 'HELP' for available commands or 'EXIT' to quit.
   SHOW DB          - List all Excel files and sheets
   LOAD DB          - Load all Excel files into memory
   SHOW MEMORY      - Display current memory usage
+  SHOW CACHE       - Display SQLite cache statistics
   SHOW LOGS        - Display log file information
   CLEAR CACHE      - Clear DataFrame cache
+  REBUILD CACHE    - Clear and rebuild SQLite cache
   HELP             - Show this help message
   EXIT / QUIT      - Exit the application
 
@@ -590,6 +643,78 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             
         except Exception as e:
             self.console.print(f"❌ Error showing logs: {e}", style="red")
+    
+    def _handle_show_cache(self):
+        """Handle SHOW CACHE command."""
+        try:
+            if not self.df_manager.use_sqlite_cache:
+                self.console.print("⚠️  SQLite cache is disabled", style="yellow")
+                return
+            
+            stats = self.df_manager.sqlite_cache.get_cache_stats()
+            
+            if not stats.get('enabled', False):
+                self.console.print("⚠️  SQLite cache is not enabled", style="yellow")
+                return
+            
+            # Calculate totals
+            total_rows = sum(f['rows'] for f in stats.get('files', []))
+            total_sheets = sum(f['sheets'] for f in stats.get('files', []))
+            
+            # Create cache statistics table
+            table = Table(title="💾 SQLite Cache Statistics", box=box.ROUNDED)
+            table.add_column("Metric", style="cyan")
+            table.add_column("Value", style="green")
+            
+            table.add_row("Cache Directory", stats['cache_dir'])
+            table.add_row("Total Files Cached", str(stats['cached_files']))
+            table.add_row("Total Sheets", str(total_sheets))
+            table.add_row("Total Rows", f"{total_rows:,}")
+            table.add_row("Cache Size", f"{stats['total_size_mb']:.2f} MB")
+            table.add_row("Active Connections", str(stats['active_connections']))
+            
+            self.console.print(table)
+            
+            # Show cached files
+            if stats.get('files'):
+                self.console.print("\n📁 Cached Files:")
+                for file_info in stats['files']:
+                    self.console.print(
+                        f"  • {file_info['file']}: {file_info['sheets']} sheets, "
+                        f"{file_info['rows']:,} rows, {file_info['size_mb']:.2f} MB"
+                    )
+            
+        except Exception as e:
+            self.console.print(f"❌ Error showing cache stats: {e}", style="red")
+    
+    def _handle_rebuild_cache(self):
+        """Handle REBUILD CACHE command."""
+        try:
+            if not self.df_manager.use_sqlite_cache:
+                self.console.print("⚠️  SQLite cache is disabled", style="yellow")
+                return
+            
+            # Confirm with user
+            self.console.print("🔄 This will clear and rebuild the entire SQLite cache.", style="yellow")
+            response = input("Continue? (y/N): ").strip().lower()
+            
+            if response != 'y':
+                self.console.print("❌ Cancelled", style="red")
+                return
+            
+            # Clear existing cache
+            self.console.print("\n🗑️  Clearing existing cache...", style="cyan")
+            self.df_manager.clear_cache()
+            
+            # Rebuild cache
+            self.console.print("🔄 Rebuilding cache...\n", style="cyan")
+            cached_files = self.df_manager.cache_all_files_to_sqlite(show_progress=True)
+            
+            success_count = sum(1 for v in cached_files.values() if v)
+            self.console.print(f"\n✅ Cache rebuilt! {success_count} files cached.", style="green bold")
+            
+        except Exception as e:
+            self.console.print(f"❌ Error rebuilding cache: {e}", style="red")
     
     def _handle_sql_query(self, query: str):
         """Handle SQL query execution.
