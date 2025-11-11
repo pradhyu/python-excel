@@ -1,0 +1,41 @@
+# Stress Test Queries for Massive Datasets
+
+## Basic Queries (Should be fast with SQLite cache)
+SELECT COUNT(*) FROM massive_employees.data
+SELECT COUNT(*) FROM massive_transactions.data
+
+## Filtering Queries
+SELECT * FROM massive_employees.data WHERE salary > 150000 LIMIT 1000
+SELECT * FROM massive_transactions.data WHERE total_amount > 5000 LIMIT 1000
+
+## Aggregation Queries (Test GROUP BY performance)
+SELECT department, COUNT(*) as count, AVG(salary) as avg_salary 
+FROM massive_employees.data 
+GROUP BY department
+
+SELECT region, SUM(total_amount) as revenue, COUNT(*) as transactions
+FROM massive_transactions.data 
+GROUP BY region
+
+## Complex Queries
+SELECT department, location, COUNT(*) as count, AVG(annual_compensation) as avg_comp
+FROM massive_employees.data 
+WHERE performance_rating >= 4 
+GROUP BY department, location 
+HAVING COUNT(*) > 100
+ORDER BY avg_comp DESC
+LIMIT 50
+
+SELECT product, region, SUM(total_amount) as revenue, SUM(profit) as profit
+FROM massive_transactions.data 
+WHERE transaction_date >= '2023-01-01'
+GROUP BY product, region 
+ORDER BY revenue DESC 
+LIMIT 100
+
+## Window Functions (Test advanced features)
+SELECT employee_id, full_name, salary, department,
+       ROW_NUMBER() OVER (PARTITION BY department ORDER BY salary DESC) as dept_rank
+FROM massive_employees.data 
+WHERE department IN ('Engineering', 'Sales', 'Marketing')
+LIMIT 1000

@@ -26,6 +26,7 @@ A powerful Python application that provides a REPL (Read-Eval-Print Loop) interf
 
 ### System Management
 - ⚡ **Memory Management**: Configurable limits, usage tracking, and cache control
+- 🚀 **SQLite Cache**: 10-60x faster queries with automatic SQLite caching (NEW!)
 - 📊 **Performance Monitoring**: Query timing, memory usage, and optimization
 - 📝 **Comprehensive Logging**: Session logs, query history, and error tracking
 - 🧹 **Cache Management**: CLEAR CACHE command and automatic cleanup

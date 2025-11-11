@@ -1,0 +1,163 @@
+Traceback (most recent call last):
+  File "/Users/pkshrestha/git/python-excel/stress_test_benchmark.py", line 298, in <module>
+    run_stress_test()
+    ~~~~~~~~~~~~~~~^^
+  File "/Users/pkshrestha/git/python-excel/stress_test_benchmark.py", line 283, in run_stress_test
+    print(f"   ✅ Average query time: {format_time(total_time / successful)}")
+                                                   ~~~~~~~~~~~^~~~~~~~~~~~
+ZeroDivisionError: division by zero
+================================================================================
+🔥 STRESS TEST BENCHMARK - Enterprise Scale Performance
+================================================================================
+
+📁 Dataset Information:
+   📊 massive_employees.csv: 603.27 MB
+   📊 massive_transactions.csv: 586.70 MB
+
+================================================================================
+🚀 Phase 1: Initialization and Cache Creation
+================================================================================
+
+📦 Initializing with SQLite cache enabled...
+✅ Initialized in 0.48ms
+
+📊 Scanning database...
+📁 Database Directory: massive_data
+📄 Total Files: 4
+💾 Loaded Files: 0
+
+Available Files and Sheets:
+  📄 transaction_summary.csv
+    📋 default
+  📄 employee_summary.csv
+    📋 default
+  📄 massive_employees.csv
+    📋 default
+  📄 massive_transactions.csv
+    📋 default
+✅ Scanned in 2.25ms
+   📁 Total files: 4
+   📋 Files: transaction_summary.csv, employee_summary.csv, massive_employees.csv, massive_transactions.csv
+
+💾 Loading database and creating SQLite cache...
+   ⚠️  This will take several minutes on first run...
+
+Loading 4 Excel files from massive_data
+  [1/4] Loading transaction_summary.csv (1 sheets)...
+  📦 Caching transaction_summary.csv to SQLite for faster queries...
+    ✓ Loaded 1 sheets (0.00 MB)
+  [2/4] Loading employee_summary.csv (1 sheets)...
+  📦 Caching employee_summary.csv to SQLite for faster queries...
+    ✓ Loaded 1 sheets (0.00 MB)
+  [3/4] Loading massive_employees.csv (1 sheets)...
+  📦 Caching massive_employees.csv to SQLite for faster queries...
+    ✓ Loaded 1 sheets (496.87 MB)
+  [4/4] Loading massive_transactions.csv (1 sheets)...
+  📦 Caching massive_transactions.csv to SQLite for faster queries...
+    ✓ Loaded 1 sheets (282.31 MB)
+
+Loaded 4 files successfully (779.18 MB total)
+
+✅ Loaded 4 files (779.18 MB total)
+
+✅ Loaded 4 files in 9m 40.28s
+   💾 Memory usage: 779.18 MB / 8192.00 MB
+   📊 Usage: 9.5%
+
+📦 SQLite Cache Statistics:
+   ✅ Cache enabled: Yes
+   📁 Cached files: 4
+   💾 Total cache size: 3368.59 MB
+
+🖥️  System Resources:
+   💾 Process memory: 1508.45 MB
+   🔧 CPU usage: 0.1%
+
+================================================================================
+🔍 Phase 2: Query Performance Tests
+================================================================================
+
+
+🔍 Test 1/10: Count 2M employees
+   Query: SELECT COUNT(*) FROM massive_employees.data...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 2/10: Count 4M transactions
+   Query: SELECT COUNT(*) FROM massive_transactions.data...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_transactions'
+
+🔍 Test 3/10: Filter high earners (LIMIT 1000)
+   Query: SELECT * FROM massive_employees.data WHERE salary > 150000 LIMIT 1000...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 4/10: Filter large transactions (LIMIT 1000)
+   Query: SELECT * FROM massive_transactions.data WHERE total_amount > 5000 LIMI...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_transactions'
+
+🔍 Test 5/10: Top performers (LIMIT 500)
+   Query: SELECT employee_id, full_name, salary, department FROM massive_employe...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 6/10: Group by department (2M rows)
+   Query: SELECT department, COUNT(*) as count, AVG(salary) as avg_salary FROM m...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 7/10: Revenue by region (4M rows)
+   Query: SELECT region, SUM(total_amount) as revenue FROM massive_transactions....
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_transactions'
+
+🔍 Test 8/10: Compensation by location
+   Query: SELECT location, COUNT(*) as employees, AVG(annual_compensation) as av...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 9/10: Complex multi-level grouping
+   Query: SELECT department, job_title, COUNT(*) as count FROM massive_employees...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_employees'
+
+🔍 Test 10/10: Top products with discounts
+   Query: SELECT product, COUNT(*) as sales, SUM(total_amount) as revenue FROM m...
+   ❌ Error: Sheet 'sheet 'data' (available: default)' not found in file 'massive_transactions'
+
+================================================================================
+📊 PERFORMANCE SUMMARY
+================================================================================
+
+📈 Performance by Query Type:
+
+
+📋 Detailed Results:
+
+Test                                          Time         Rows         Mem Δ     
+--------------------------------------------------------------------------------
+Count 2M employees                            ERROR       
+Count 4M transactions                         ERROR       
+Filter high earners (LIMIT 1000)              ERROR       
+Filter large transactions (LIMIT 1000)        ERROR       
+Top performers (LIMIT 500)                    ERROR       
+Group by department (2M rows)                 ERROR       
+Revenue by region (4M rows)                   ERROR       
+Compensation by location                      ERROR       
+Complex multi-level grouping                  ERROR       
+Top products with discounts                   ERROR       
+--------------------------------------------------------------------------------
+TOTAL                                         0.00ms                0
+
+✅ Successful queries: 0/10
+
+🖥️  Final System State:
+   💾 Process memory: 2528.27 MB
+   📊 Memory increase: +2440.52 MB
+
+📦 Final Cache Statistics:
+   💾 Cache size: 3368.59 MB
+   📁 Cached files: 4
+
+================================================================================
+✅ STRESS TEST COMPLETE!
+================================================================================
+
+🎯 Key Findings:
+   ✅ Handled 6M+ total rows across datasets
+
+
+❌ Test failed: division by zero

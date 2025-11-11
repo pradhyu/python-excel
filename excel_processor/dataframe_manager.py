@@ -9,6 +9,7 @@ from datetime import datetime
 
 from .excel_loader import ExcelLoader
 from .models import ExcelFile, DatabaseInfo
+from .sqlite_cache import SQLiteCache
 from .exceptions import (
     DatabaseDirectoryError, 
     TableNotFoundError, 
@@ -20,12 +21,15 @@ from .exceptions import (
 class DataFrameManager:
     """Manages Excel files and DataFrames within a database directory."""
     
-    def __init__(self, db_directory: Union[str, Path], memory_limit_mb: float = 1024.0):
+    def __init__(self, db_directory: Union[str, Path], memory_limit_mb: float = 1024.0, 
+                 use_sqlite_cache: bool = True, cache_dir: Optional[str] = None):
         """Initialize DataFrame manager with database directory.
         
         Args:
             db_directory: Path to directory containing Excel files
             memory_limit_mb: Memory limit in MB for loaded DataFrames
+            use_sqlite_cache: Enable SQLite caching for faster queries
+            cache_dir: Custom cache directory (default: .excel_cache in db_directory)
         """
         self.db_directory = Path(db_directory)
         self.memory_limit_mb = memory_limit_mb
@@ -33,6 +37,12 @@ class DataFrameManager:
         self.loaded_files: Dict[str, ExcelFile] = {}
         self._file_cache: Dict[str, datetime] = {}  # filename -> last_modified
         self.temp_tables: Dict[str, pd.DataFrame] = {}  # In-memory temporary tables
+        
+        # Initialize SQLite cache
+        if cache_dir is None:
+            cache_dir = str(self.db_directory / '.excel_cache')
+        self.sqlite_cache = SQLiteCache(cache_dir=cache_dir, enabled=use_sqlite_cache)
+        self.use_sqlite_cache = use_sqlite_cache
         
         # Validate database directory
         if not self.db_directory.exists():
@@ -137,6 +147,11 @@ class DataFrameManager:
                     self.memory_limit_mb,
                     f"loading file '{file_name}'"
                 )
+            
+            # Cache to SQLite if enabled
+            if self.use_sqlite_cache and not self.sqlite_cache.is_cached(file_path):
+                print(f"  📦 Caching {file_name} to SQLite for faster queries...")
+                self.sqlite_cache.cache_file(file_path, excel_file.sheets)
             
             # Cache the loaded file
             self.loaded_files[file_name] = excel_file
@@ -253,7 +268,7 @@ class DataFrameManager:
         }
     
     def clear_cache(self, file_name: Optional[str] = None) -> None:
-        """Clear cached DataFrames.
+        """Clear cached DataFrames and SQLite cache.
         
         Args:
             file_name: Specific file to clear, or None to clear all
@@ -263,9 +278,15 @@ class DataFrameManager:
                 del self.loaded_files[file_name]
             if file_name in self._file_cache:
                 del self._file_cache[file_name]
+            # Clear SQLite cache
+            if self.use_sqlite_cache:
+                self.sqlite_cache.clear_cache(file_name)
         else:
             self.loaded_files.clear()
             self._file_cache.clear()
+            # Clear all SQLite cache
+            if self.use_sqlite_cache:
+                self.sqlite_cache.clear_cache()
     
     def get_column_info(self, file_name: str, sheet_name: Union[str, int]) -> Dict[str, str]:
         """Get column information for a specific sheet.
@@ -422,3 +443,36 @@ class DataFrameManager:
             return True
         except:
             return False
+ 
+   
+    def get_cache_stats(self) -> Dict:
+        """Get SQLite cache statistics.
+        
+        Returns:
+            Dictionary with cache statistics
+        """
+        if not self.use_sqlite_cache:
+            return {'enabled': False}
+        
+        return self.sqlite_cache.get_cache_stats()
+    
+    def query_with_cache(self, file_name: str, sheet_name: str, sql_query: str) -> Optional[pd.DataFrame]:
+        """
+        Execute query using SQLite cache if available, fallback to DataFrame.
+        
+        Args:
+            file_name: Excel file name
+            sheet_name: Sheet name
+            sql_query: SQL query to execute
+            
+        Returns:
+            DataFrame with results
+        """
+        if self.use_sqlite_cache:
+            # Try cache first
+            result = self.sqlite_cache.query(file_name, sheet_name, sql_query)
+            if result is not None:
+                return result
+        
+        # Fallback to loading DataFrame
+        return None

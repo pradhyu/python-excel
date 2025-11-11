@@ -16,16 +16,25 @@ from .exceptions import SQLSyntaxError, ExcelProcessorError
 class ExcelProcessor:
     """Main interface for using Excel DataFrame Processor in notebooks and scripts."""
     
-    def __init__(self, db_directory: Union[str, Path], memory_limit_mb: float = 1024.0):
+    def __init__(self, db_directory: Union[str, Path], memory_limit_mb: float = 1024.0, 
+                 use_sqlite_cache: bool = True, cache_dir: Optional[str] = None):
         """Initialize the Excel processor.
         
         Args:
             db_directory: Path to directory containing Excel files
             memory_limit_mb: Memory limit in MB for loaded DataFrames
+            use_sqlite_cache: Enable SQLite caching for faster queries (recommended for large files)
+            cache_dir: Custom cache directory (default: .excel_cache in db_directory)
         """
         self.db_directory = Path(db_directory)
-        self.df_manager = DataFrameManager(self.db_directory, memory_limit_mb)
+        self.df_manager = DataFrameManager(
+            self.db_directory, 
+            memory_limit_mb,
+            use_sqlite_cache=use_sqlite_cache,
+            cache_dir=cache_dir
+        )
         self.sql_parser = SQLParser()
+        self.use_sqlite_cache = use_sqlite_cache
         
     def query(self, sql: str, display_result: bool = True) -> pd.DataFrame:
         """Execute a SQL query and return the result as a DataFrame.
@@ -58,8 +67,22 @@ class ExcelProcessor:
                         raise ExcelProcessorError(f"Temporary table '{table_ref.file_name}' not found")
                     df = temp_df
                 else:
-                    # Load the DataFrame from Excel file
-                    df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
+                    # CRITICAL FIX: Try SQLite cache first for simple queries
+                    if self.use_sqlite_cache and self._can_use_sqlite_for_query(parsed_query):
+                        # Try to execute directly on SQLite cache (FAST!)
+                        print(f"🚀 Using SQLite cache for query...")
+                        cache_result = self._try_sqlite_query(table_ref.file_name, table_ref.sheet_name, sql)
+                        if cache_result is not None:
+                            print(f"✅ SQLite cache hit! Returned {len(cache_result)} rows")
+                            df = cache_result
+                        else:
+                            print(f"⚠️  SQLite cache miss, falling back to pandas...")
+                            # Fallback to loading DataFrame
+                            df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
+                    else:
+                        print(f"📊 Using pandas (complex query or cache disabled)")
+                        # Load the DataFrame from Excel file
+                        df = self.df_manager.get_dataframe(table_ref.file_name, table_ref.sheet_name)
                 
                 # Handle GROUP BY queries differently
                 if parsed_query.group_by_node:
@@ -538,6 +561,18 @@ class ExcelProcessor:
         """Get current memory usage information."""
         return self.df_manager.get_memory_usage()
     
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get SQLite cache statistics.
+        
+        Returns:
+            Dictionary with cache statistics including:
+            - enabled: Whether caching is enabled
+            - cached_files: Number of files in cache
+            - total_size_mb: Total cache size in MB
+            - files: List of cached files with details
+        """
+        return self.df_manager.get_cache_stats()
+    
     def get_file_info(self, file_name: str) -> Dict[str, Any]:
         """Get information about a specific Excel file."""
         try:
@@ -584,6 +619,46 @@ class ExcelProcessor:
         # Show summary info
         if len(df) > 10:
             print(f"\n📈 Showing all {len(df)} rows")
+    
+    def _can_use_sqlite_for_query(self, parsed_query) -> bool:
+        """Check if query can be executed directly on SQLite cache."""
+        # For now, allow simple SELECT queries without complex features
+        # Exclude queries with window functions or complex pandas operations
+        if parsed_query.group_by_node:
+            return False  # GROUP BY needs pandas for now
+        
+        # Check for window functions
+        if parsed_query.select_node:
+            from .sql_ast import WindowFunctionNode
+            for col in parsed_query.select_node.columns:
+                if isinstance(col, WindowFunctionNode):
+                    return False
+        
+        # Simple SELECT queries can use SQLite
+        return True
+    
+    def _try_sqlite_query(self, file_name: str, sheet_name: str, sql: str) -> Optional[pd.DataFrame]:
+        """Try to execute query directly on SQLite cache."""
+        try:
+            # Sanitize table name for SQLite
+            table_name = sheet_name.replace(' ', '_').replace('.', '_')
+            
+            # Convert query to use SQLite table name
+            # Simple replacement for now - more sophisticated parsing could be added
+            sqlite_sql = sql.replace(f"{file_name}.{sheet_name}", f'"{table_name}"')
+            
+            # Get SQLite connection
+            conn = self.df_manager.sqlite_cache.get_connection(file_name)
+            if conn is None:
+                return None
+            
+            # Execute query directly on SQLite
+            result = pd.read_sql_query(sqlite_sql, conn)
+            return result
+            
+        except Exception as e:
+            # If SQLite query fails, return None to fallback to pandas
+            return None
 
 
 @magics_class
