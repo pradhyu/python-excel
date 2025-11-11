@@ -79,3 +79,5 @@ sample_data/
 # Uncomment the lines below if you want to exclude sample Excel files
 # *.xlsx
 # *.xls
+massive_data/.excel_cache
+massive_data/.log
