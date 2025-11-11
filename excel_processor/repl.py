@@ -434,6 +434,14 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             self.logger.log_command(command, "REBUILD_CACHE")
             self._handle_rebuild_cache()
             return True
+        elif cmd_upper.startswith('DESCRIBE ') or cmd_upper.startswith('DESC '):
+            self.logger.log_command(command, "DESCRIBE")
+            self._handle_describe(command)
+            return True
+        elif cmd_upper.startswith('SHOW COLUMNS FROM '):
+            self.logger.log_command(command, "SHOW_COLUMNS")
+            self._handle_describe(command)
+            return True
         
         return False
     
@@ -709,6 +717,74 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             
         except Exception as e:
             self.console.print(f"❌ Error rebuilding cache: {e}", style="red")
+    
+    def _handle_describe(self, command: str):
+        """Handle DESCRIBE/DESC/SHOW COLUMNS command to display table structure.
+        
+        Args:
+            command: DESCRIBE table_name or SHOW COLUMNS FROM table_name
+        """
+        try:
+            # Parse the command to extract table name
+            cmd_upper = command.upper().strip()
+            
+            if cmd_upper.startswith('DESCRIBE ') or cmd_upper.startswith('DESC '):
+                # Extract table name after DESCRIBE/DESC
+                parts = command.split(maxsplit=1)
+                if len(parts) < 2:
+                    self.console.print("❌ Usage: DESCRIBE table_name (e.g., DESCRIBE employees.xlsx.staff)", style="red")
+                    return
+                table_ref = parts[1].strip()
+            elif cmd_upper.startswith('SHOW COLUMNS FROM '):
+                # Extract table name after FROM
+                parts = command.split('FROM', 1)
+                if len(parts) < 2:
+                    self.console.print("❌ Usage: SHOW COLUMNS FROM table_name", style="red")
+                    return
+                table_ref = parts[1].strip()
+            else:
+                return
+            
+            # Parse table reference (file.sheet format)
+            if '.' not in table_ref:
+                self.console.print("❌ Table name must be in format: filename.sheetname", style="red")
+                self.console.print("   Example: employees.xlsx.staff", style="dim")
+                return
+            
+            # Split into file and sheet
+            parts = table_ref.rsplit('.', 1)
+            if len(parts) != 2:
+                self.console.print("❌ Invalid table format. Use: filename.sheetname", style="red")
+                return
+            
+            file_name = parts[0]
+            sheet_name = parts[1]
+            
+            # Add .xlsx if not present
+            if not any(file_name.endswith(ext) for ext in ['.xlsx', '.xls', '.csv', '.xlsm', '.xlsb']):
+                file_name += '.xlsx'
+            
+            # Get column information
+            column_info = self.df_manager.get_column_info(file_name, sheet_name)
+            
+            if not column_info:
+                self.console.print(f"❌ No columns found in {file_name}.{sheet_name}", style="red")
+                return
+            
+            # Create table to display columns
+            table = Table(title=f"📋 Columns in {file_name}.{sheet_name}", box=box.ROUNDED)
+            table.add_column("Column Name", style="cyan", no_wrap=True)
+            table.add_column("Data Type", style="green")
+            
+            for col_name, col_type in column_info.items():
+                table.add_row(col_name, col_type)
+            
+            self.console.print(table)
+            self.console.print(f"\n📊 Total columns: {len(column_info)}", style="dim")
+            
+        except Exception as e:
+            self.console.print(f"❌ Error describing table: {e}", style="red")
+            self.console.print("💡 Tip: Use format 'DESCRIBE filename.sheetname'", style="yellow")
     
     def _handle_sql_query(self, query: str):
         """Handle SQL query execution.
