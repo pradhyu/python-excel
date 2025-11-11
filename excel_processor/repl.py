@@ -434,7 +434,7 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             self.logger.log_command(command, "REBUILD_CACHE")
             self._handle_rebuild_cache()
             return True
-        elif cmd_upper.startswith('DESCRIBE ') or cmd_upper.startswith('DESC '):
+        elif cmd_upper == 'DESCRIBE' or cmd_upper == 'DESC' or cmd_upper.startswith('DESCRIBE ') or cmd_upper.startswith('DESC '):
             self.logger.log_command(command, "DESCRIBE")
             self._handle_describe(command)
             return True
@@ -465,6 +465,9 @@ Type 'HELP' for available commands or 'EXIT' to quit.
   SELECT name, department FROM employees.staff > output.csv
 
 📋 **Special Commands:**
+  DESCRIBE         - Show all files and sheets in database
+  DESCRIBE file    - Show all sheets and columns in a file
+  DESCRIBE file.sheet - Show columns in specific sheet
   SHOW DB          - List all Excel files and sheets
   LOAD DB          - Load all Excel files into memory
   SHOW MEMORY      - Display current memory usage
@@ -719,42 +722,142 @@ Type 'HELP' for available commands or 'EXIT' to quit.
             self.console.print(f"❌ Error rebuilding cache: {e}", style="red")
     
     def _handle_describe(self, command: str):
-        """Handle DESCRIBE/DESC/SHOW COLUMNS command to display table structure.
+        """Handle DESCRIBE/DESC command to display database structure.
+        
+        Like Oracle's DESCRIBE:
+        - DESCRIBE (no args) - Shows all files and sheets in database
+        - DESCRIBE filename - Shows all sheets and columns in that file
+        - DESCRIBE filename.sheet - Shows columns in specific sheet
         
         Args:
-            command: DESCRIBE table_name or SHOW COLUMNS FROM table_name
+            command: DESCRIBE [table_name]
         """
         try:
-            # Parse the command to extract table name
+            # Parse the command
             cmd_upper = command.upper().strip()
+            parts = command.split(maxsplit=1)
             
-            if cmd_upper.startswith('DESCRIBE ') or cmd_upper.startswith('DESC '):
-                # Extract table name after DESCRIBE/DESC
-                parts = command.split(maxsplit=1)
-                if len(parts) < 2:
-                    self.console.print("❌ Usage: DESCRIBE table_name (e.g., DESCRIBE employees.xlsx.staff)", style="red")
-                    return
-                table_ref = parts[1].strip()
-            elif cmd_upper.startswith('SHOW COLUMNS FROM '):
-                # Extract table name after FROM
-                parts = command.split('FROM', 1)
-                if len(parts) < 2:
-                    self.console.print("❌ Usage: SHOW COLUMNS FROM table_name", style="red")
-                    return
-                table_ref = parts[1].strip()
+            # DESCRIBE with no arguments - show all files and sheets
+            if len(parts) == 1 or (len(parts) == 2 and not parts[1].strip()):
+                self._describe_all_database()
+                return
+            
+            table_ref = parts[1].strip()
+            
+            # Check if it's a file or file.sheet reference
+            if '.' in table_ref:
+                # Could be filename.extension or filename.sheet or filename.extension.sheet
+                # Try to determine if last part is a sheet name or extension
+                parts_split = table_ref.split('.')
+                
+                # If last part looks like an extension, it's just a filename
+                if parts_split[-1].lower() in ['xlsx', 'xls', 'csv', 'xlsm', 'xlsb']:
+                    # DESCRIBE filename.xlsx - show all sheets in file
+                    self._describe_file(table_ref)
+                else:
+                    # DESCRIBE filename.sheet or filename.xlsx.sheet
+                    self._describe_sheet(table_ref)
             else:
+                # DESCRIBE filename - show all sheets in file (add .xlsx)
+                self._describe_file(table_ref + '.xlsx')
+            
+        except Exception as e:
+            self.console.print(f"❌ Error: {e}", style="red")
+            self.console.print("\n💡 Usage:", style="yellow")
+            self.console.print("   DESCRIBE                    - Show all files and sheets", style="dim")
+            self.console.print("   DESCRIBE employees          - Show all sheets in employees.xlsx", style="dim")
+            self.console.print("   DESCRIBE employees.xlsx     - Show all sheets in employees.xlsx", style="dim")
+            self.console.print("   DESCRIBE employees.staff    - Show columns in employees.xlsx.staff", style="dim")
+    
+    def _describe_all_database(self):
+        """Show all files and sheets in the database (like Oracle's user_tables)."""
+        try:
+            db_info = self.df_manager.get_database_info()
+            
+            if not db_info.excel_files:
+                self.console.print("📁 No Excel files found in database directory.", style="yellow")
                 return
             
-            # Parse table reference (file.sheet format)
-            if '.' not in table_ref:
-                self.console.print("❌ Table name must be in format: filename.sheetname", style="red")
-                self.console.print("   Example: employees.xlsx.staff", style="dim")
+            # Create main table
+            table = Table(title="📊 Database Structure (All Files and Sheets)", box=box.ROUNDED)
+            table.add_column("File", style="cyan", no_wrap=True)
+            table.add_column("Sheet", style="green")
+            table.add_column("Columns", style="yellow")
+            table.add_column("Status", style="blue")
+            
+            total_sheets = 0
+            for file_name, sheet_names in db_info.excel_files.items():
+                for i, sheet_name in enumerate(sheet_names):
+                    total_sheets += 1
+                    
+                    # Get column count
+                    try:
+                        column_info = self.df_manager.get_column_info(file_name, sheet_name)
+                        col_count = len(column_info)
+                    except:
+                        col_count = "?"
+                    
+                    # Status
+                    status = "✅ Loaded" if file_name in self.df_manager.loaded_files else "⏳ Not Loaded"
+                    
+                    # Show file name only on first sheet
+                    file_display = file_name if i == 0 else ""
+                    
+                    table.add_row(file_display, sheet_name, str(col_count), status)
+            
+            self.console.print(table)
+            self.console.print(f"\n📈 Summary: {db_info.total_files} files, {total_sheets} sheets", style="dim")
+            self.console.print("💡 Use 'DESCRIBE filename' to see columns in a specific file", style="dim")
+            
+        except Exception as e:
+            self.console.print(f"❌ Error scanning database: {e}", style="red")
+    
+    def _describe_file(self, file_name: str):
+        """Show all sheets and their columns in a specific file."""
+        try:
+            # Get sheet names
+            sheet_names = self.df_manager.excel_loader.get_sheet_names(
+                self.df_manager.db_directory / file_name
+            )
+            
+            if not sheet_names:
+                self.console.print(f"❌ No sheets found in {file_name}", style="red")
                 return
             
-            # Split into file and sheet
+            self.console.print(f"\n📄 File: {file_name}", style="cyan bold")
+            self.console.print(f"📋 Sheets: {len(sheet_names)}\n", style="dim")
+            
+            # Show each sheet with its columns
+            for sheet_name in sheet_names:
+                try:
+                    column_info = self.df_manager.get_column_info(file_name, sheet_name)
+                    
+                    # Create table for this sheet
+                    table = Table(title=f"Sheet: {sheet_name}", box=box.ROUNDED, show_header=True)
+                    table.add_column("Column Name", style="cyan", no_wrap=True)
+                    table.add_column("Data Type", style="green")
+                    
+                    for col_name, col_type in column_info.items():
+                        table.add_row(col_name, col_type)
+                    
+                    self.console.print(table)
+                    self.console.print(f"   {len(column_info)} columns\n", style="dim")
+                    
+                except Exception as e:
+                    self.console.print(f"   ⚠️  Could not read sheet '{sheet_name}': {e}", style="yellow")
+            
+            self.console.print(f"💡 Query format: SELECT * FROM {file_name}.{sheet_names[0]}", style="dim")
+            
+        except Exception as e:
+            self.console.print(f"❌ Error reading file: {e}", style="red")
+    
+    def _describe_sheet(self, table_ref: str):
+        """Show columns in a specific sheet."""
+        try:
+            # Parse table reference
             parts = table_ref.rsplit('.', 1)
             if len(parts) != 2:
-                self.console.print("❌ Invalid table format. Use: filename.sheetname", style="red")
+                self.console.print("❌ Invalid format. Use: filename.sheetname", style="red")
                 return
             
             file_name = parts[0]
@@ -772,19 +875,21 @@ Type 'HELP' for available commands or 'EXIT' to quit.
                 return
             
             # Create table to display columns
-            table = Table(title=f"📋 Columns in {file_name}.{sheet_name}", box=box.ROUNDED)
+            table = Table(title=f"📋 {file_name}.{sheet_name}", box=box.ROUNDED)
             table.add_column("Column Name", style="cyan", no_wrap=True)
             table.add_column("Data Type", style="green")
+            table.add_column("Nullable", style="yellow")
             
             for col_name, col_type in column_info.items():
-                table.add_row(col_name, col_type)
+                # All columns are nullable in pandas/Excel
+                table.add_row(col_name, col_type, "YES")
             
             self.console.print(table)
-            self.console.print(f"\n📊 Total columns: {len(column_info)}", style="dim")
+            self.console.print(f"\n📊 Total: {len(column_info)} columns", style="dim")
+            self.console.print(f"💡 Query: SELECT * FROM {file_name}.{sheet_name}", style="dim")
             
         except Exception as e:
-            self.console.print(f"❌ Error describing table: {e}", style="red")
-            self.console.print("💡 Tip: Use format 'DESCRIBE filename.sheetname'", style="yellow")
+            self.console.print(f"❌ Error: {e}", style="red")
     
     def _handle_sql_query(self, query: str):
         """Handle SQL query execution.
